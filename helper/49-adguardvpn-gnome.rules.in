@@ -1,0 +1,7 @@
+// Only the explicitly selected user in an active local desktop session.
+// Never grant access to generic pkexec, systemctl, or arbitrary commands.
+polkit.addRule(function(action, subject) {
+    if (action.id === 'org.gnome.adguardvpn.control' &&
+        subject.local && subject.active && subject.user === '@USERNAME@')
+        return polkit.Result.YES;
+});

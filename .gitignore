@@ -1,0 +1,22 @@
+# Local credentials and per-machine configuration must never be committed.
+.env
+.env.*
+secrets/
+user-data/
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+*.pid
+adguardvpn-cli.conf
+vpn.pid
+
+# Generated archives and editor/OS artifacts.
+*.zip
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+

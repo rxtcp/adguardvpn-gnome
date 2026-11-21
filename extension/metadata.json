@@ -1,0 +1,6 @@
+{
+  "uuid": "adguardvpn-toggle@chatgpt.local",
+  "name": "AdGuard VPN Quick Toggle",
+  "description": "Connect and disconnect an existing AdGuard VPN CLI installation from GNOME Quick Settings.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"]
+}

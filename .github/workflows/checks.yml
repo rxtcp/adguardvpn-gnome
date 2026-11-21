@@ -1,0 +1,19 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  static-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n scripts/*.sh helper/client.sh
+      - name: GNOME JavaScript syntax
+        run: node --check extension/extension.js
+      - name: Python unit tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+      - name: Polkit XML syntax
+        run: python3 -c 'import xml.etree.ElementTree as ET; ET.parse("helper/org.gnome.adguardvpn.control.policy")'
