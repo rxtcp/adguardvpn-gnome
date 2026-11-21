@@ -117,21 +117,31 @@ export async function createEnvironment(options = {}) {
                 for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
             }, {context, identifier: key});
         } else {
-            let source = await readFile(new URL(key), 'utf8');
-            if (options.legacyExports && key.endsWith('/extension/extension.js'))
-                source += '\nexport {cleanCliOutput, isValidLocation, parseLocations, findLowestPing, countryFlag, parseStatus, readPreferredLocation, runCli, openActionTerminal};';
+            const source = await readFile(new URL(key), 'utf8');
             module = new vm.SourceTextModule(source, {context, identifier: key});
         }
         modules.set(key, module);
         await module.link((specifier, parent) => load(specifier.startsWith('.') ? new URL(specifier, parent.identifier) : specifier));
         return module;
     }
-    const entry = await load(new URL('../../extension/extension.js', import.meta.url));
+    const entry = await load(new URL('../../dist/extension.js', import.meta.url));
     await entry.evaluate();
+    const namespace = {...entry.namespace};
+    const importModule = async path => {
+        const module = await load(new URL(`../../dist/${path}`, import.meta.url));
+        if (module.status !== 'evaluated') await module.evaluate();
+        return module.namespace;
+    };
+    if (options.includeFunctions) {
+        for (const path of ['domain/cli-output.js', 'domain/preferences.js', 'domain/locations.js',
+            'domain/status.js', 'platform/preference-store.js', 'platform/subprocess.js', 'platform/terminal.js'])
+            Object.assign(namespace, await importModule(path));
+    }
     const extension = new entry.namespace.default();
     const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve)); };
     return {
-        calls, notifications, warnings, timers, processes, commands, actors, Gio, GLib, entry, load, settle,
+        calls, notifications, warnings, timers, processes, commands, actors, Gio, GLib,
+        entry: {namespace}, importModule, settle, createMenu: () => new Menu(),
         get saved() { return saved; }, get indicator() { return indicator; },
         get toggle() { return indicator.quickSettingsItems[0]; },
         get cancelled() { return cancelled; }, get cancelHandlerCount() { return cancelHandlers.size; },

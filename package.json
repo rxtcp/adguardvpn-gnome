@@ -1,0 +1,26 @@
+{
+  "name": "adguardvpn-gnome",
+  "version": "1.0.0",
+  "description": "Unofficial GNOME Shell Quick Settings integration for the official AdGuard VPN CLI, with an optional passwordless systemd/Polkit controller for Fedora Workstation.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rxtcp/adguardvpn-gnome.git"
+  },
+  "devDependencies": {
+    "@girs/gjs": "5.6.0",
+    "@girs/gnome-shell": "51.0.1",
+    "typescript": "5.9.3"
+  },
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --experimental-vm-modules --test tests/extension/*.test.mjs",
+    "test:coverage": "npm run build && node --experimental-vm-modules --experimental-test-coverage --test-coverage-include=\"dist/**/*.js\" --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 --test tests/extension/*.test.mjs"
+  }
+}

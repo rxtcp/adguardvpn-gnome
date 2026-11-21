@@ -2,8 +2,8 @@
 
 from contextlib import redirect_stderr, redirect_stdout
 import io
-import json
 from pathlib import Path
+import runpy
 import stat
 import subprocess
 import tempfile
@@ -52,6 +52,19 @@ class PrivilegedBoundaryTests(unittest.TestCase):
                                     stderr=subprocess.STDOUT, text=True, timeout=6, check=False)
         self.assertEqual(control.environment()['HOME'], str(control.PROFILE))
         self.assertEqual(control.environment()['PATH'], '/usr/sbin:/usr/bin:/sbin:/bin')
+
+    def test_service_activity_uses_exit_code_and_short_timeout(self):
+        for code in (0, 1, 3):
+            with self.subTest(code=code), patch.object(control, 'invoke',
+                    return_value=subprocess.CompletedProcess([], code)) as invoke:
+                self.assertEqual(control.is_active(), code == 0)
+                invoke.assert_called_once_with([control.SYSTEMCTL, 'is-active', '--quiet', control.UNIT], 5)
+
+    def test_executable_entry_refuses_unprivileged_invocation(self):
+        with patch('os.geteuid', return_value=1000), patch('sys.argv', ['control', 'status']), \
+             redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exit_status:
+            runpy.run_path(str(Path(control.__file__)), run_name='__main__')
+        self.assertEqual(exit_status.exception.code, 1)
 
     def test_journal_requires_a_valid_current_invocation(self):
         for code, output in ((1, 'a' * 32), (0, ''), (0, '../other'), (0, 'g' * 32)):

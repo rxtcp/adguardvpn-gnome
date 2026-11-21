@@ -43,6 +43,13 @@ test('confirmed external status updates indicator, formatted subtitle and saved 
     assert.deepEqual(JSON.parse(app.saved), {location: 'Miami', iso: 'US'});
 });
 
+test('JSON preferences with surrounding location whitespace normalize during menu initialization', async () => {
+    const app = await start({saved: '{"location":" Miami ","iso":"US"}'});
+    assert.deepEqual(JSON.parse(app.saved), {location: 'Miami', iso: 'US'});
+    assert.ok(app.actors.some(actor => actor.text === 'Default: US -> MIAMI'));
+    assert.equal(app.toggle.subtitle, 'US -> MIAMI');
+});
+
 test('unknown status grace retains confirmed indicator and then reports unavailable', async () => {
     const app = await start();
     app.commands.push({output: 'Connected to Miami'}); await app.refresh();

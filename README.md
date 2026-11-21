@@ -31,8 +31,13 @@ See [extension/README.md](extension/README.md) for UI details and troubleshootin
 2. Install the GNOME Shell extension:
 
    ```bash
+   npm ci
    ./scripts/install-extension.sh
    ```
+
+   Building requires Node.js 22.18 or newer, npm and zip. The installer compiles
+   the TypeScript sources and installs the generated JavaScript modules. Node.js
+   and npm are build dependencies; the running extension uses GNOME's GJS.
 
 3. Log out of GNOME and log back in, then enable the extension if needed:
 
@@ -86,18 +91,29 @@ manual cleanup.
 
 ## Verification
 
-The repository includes pure unit checks for privileged command validation,
-argument handling, the systemd status fallback, and the saved selection:
+The extension is written in strict TypeScript. The original behavior was
+recorded in [docs/behavior-contract.md](docs/behavior-contract.md) and tested
+before the refactoring. See [docs/development.md](docs/development.md) for the
+module layout, test boundaries and GNOME smoke-test procedure.
+
+Run the deterministic extension tests, helper tests and archive checks:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-bash -n scripts/*.sh helper/client.sh
-node --check extension/extension.js
+npm ci
+python3 -m pip install -r requirements-dev.txt
+npm run test:coverage
+PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run -m unittest discover -s tests -v
+python3 -m coverage report
+for script in scripts/*.sh helper/client.sh; do bash -n "$script"; done
 ```
 
-The included GitHub Actions workflow runs these checks on pushes and pull
-requests. They do **not** replace real testing against GNOME, Polkit and a
-VPN tunnel.
+The GitHub Actions workflow runs these checks on pushes and pull requests.
+It requires 100% line, branch and function coverage of the compiled extension,
+and 100% statement and branch coverage of the Python controller. The tests cover
+parsing, preferences, navigation, connection switching, startup/status grace
+periods, cancellation, failures, privileged validation and the installed ZIP's
+complete module graph. GNOME, subprocesses and the clock are simulated; these
+checks do **not** replace real testing against GNOME, Polkit and a VPN tunnel.
 
 ## Publishing and security
 

@@ -1,8 +1,9 @@
 # Behavior preserved by the refactoring
 
 This contract was recorded against commit `670492a`, before changing production
-code. `tests/extension` exercises the original extension through a simulated
-GNOME environment, with deterministic subprocesses, filesystem and clock.
+code. The suite in `tests/extension` first exercised the original extension
+through a simulated GNOME environment, with deterministic subprocesses,
+filesystem and clock. The same assertions now exercise the compiled modules.
 
 | Area | Existing behavior |
 | --- | --- |

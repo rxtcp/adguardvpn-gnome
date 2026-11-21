@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createEnvironment, plain} from './gnome-environment.mjs';
 
-async function functions() { return (await createEnvironment({legacyExports: true})).entry.namespace; }
+async function functions() { return (await createEnvironment({includeFunctions: true})).entry.namespace; }
 
 test('terminal escapes and carriage returns are removed', async () => {
     const {cleanCliOutput} = await functions();
@@ -45,6 +45,6 @@ for (const [saved, expected] of [
     ['DE', {location: 'DE', iso: 'DE'}], ['{"location":"Miami","iso":"us"}', {location: 'Miami', iso: null}],
     ['{"location":""}', {location: 'US', iso: 'US'}], ['{broken', {location: 'US', iso: 'US'}],
 ]) test(`preference compatibility: ${saved}`, async () => {
-    const app = await createEnvironment({saved, legacyExports: true});
+    const app = await createEnvironment({saved, includeFunctions: true});
     assert.deepEqual(plain(app.entry.namespace.readPreferredLocation()), expected);
 });
