@@ -43,8 +43,15 @@ gnome-shell --version
 From the repository root, install the extension with:
 
 ```bash
+npm ci
 ./scripts/install-extension.sh
 ```
+
+Node.js 22.18 or newer, npm and zip are required for building. Source modules live
+in `src/`; `npm run build` compiles them to `dist/` and copies the metadata and
+icon. The installer packages the entire `dist/` directory so relative module
+imports remain intact. The installed extension runs with GJS and needs no npm
+packages at runtime.
 
 Log out of GNOME and log in again. Then enable the extension:
 
