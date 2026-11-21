@@ -45,9 +45,11 @@ See [extension/README.md](extension/README.md) for UI details and troubleshootin
    gnome-extensions enable adguardvpn-toggle@chatgpt.local
    ```
 
-To remove the extension, run `./scripts/uninstall-extension.sh`.
+For removal, follow [Uninstallation](#uninstallation) below.
 
-The scripts only manage the user's GNOME extension. They do not request root privileges or modify sudoers, Polkit, NetworkManager, or VPN routes.
+The extension installation/removal scripts only manage the user's GNOME
+extension. They do not request root privileges or modify sudoers, Polkit,
+NetworkManager, or VPN routes.
 
 ## Passwordless connections
 
@@ -85,9 +87,97 @@ adguardvpn-gnome-ctl disconnect
 The controller is opt-in. The extension also works without it, although TUN
 connect/disconnect may then require administrator authorization.
 
-To uninstall the privileged helper, run `sudo ./scripts/uninstall-helper.sh`.
-It leaves the private root-owned AdGuard login data in place for deliberate
-manual cleanup.
+The removal procedure, including optional deletion of saved login data, is
+described in [Uninstallation](#uninstallation).
+
+## Uninstallation
+
+Run the commands below from the repository root, in a terminal in your local
+GNOME session. Remove the components you installed using the matching procedure.
+
+### Remove both the extension and passwordless helper
+
+1. Disable the extension as your normal desktop user. This stops its background
+   status checks before removing the helper:
+
+   ```bash
+   gnome-extensions disable adguardvpn-toggle@chatgpt.local
+   ```
+
+2. Remove the optional privileged helper:
+
+   ```bash
+   sudo ./scripts/uninstall-helper.sh
+   ```
+
+   The script disconnects the protected VPN and stops its transient systemd
+   service, then removes the helper, its protected CLI copy and its Polkit
+   policy/rule. If it reports `Could not safely disconnect. Uninstall stopped.`,
+   resolve the disconnect error before continuing. The private profile at
+   `/var/lib/adguardvpn-gnome` is retained; see the optional cleanup below.
+
+3. Remove the extension as your normal desktop user, without `sudo`:
+
+   ```bash
+   ./scripts/uninstall-extension.sh
+   ```
+
+4. Log out of GNOME and log back in to finish unloading the extension.
+
+### Remove only the extension
+
+First disconnect the VPN using the toggle. If using a terminal instead, run
+`adguardvpn-gnome-ctl disconnect` for a protected connection, or
+`adguardvpn-cli disconnect` for a direct CLI connection. Removing the extension
+alone does not stop a running VPN session.
+
+```bash
+./scripts/uninstall-extension.sh
+```
+
+Run this as your normal desktop user, then log out of GNOME and log back in.
+An installed passwordless helper remains installed until separately removed.
+
+### Remove only the passwordless helper
+
+Disable the extension, then remove the helper:
+
+```bash
+gnome-extensions disable adguardvpn-toggle@chatgpt.local
+sudo ./scripts/uninstall-helper.sh
+```
+
+After the helper uninstaller completes successfully, re-enable the extension:
+
+```bash
+gnome-extensions enable adguardvpn-toggle@chatgpt.local
+```
+
+The extension detects the remaining user CLI when re-enabled and resumes direct
+CLI operation; connections may request administrator authorization again.
+
+### Optional cleanup of saved settings and login data
+
+The uninstall scripts retain the extension's saved location and the helper's
+separate AdGuard login profile. For complete removal of this project's saved
+data, first finish the applicable uninstall steps above, then remove only the
+data you no longer want:
+
+```bash
+# Saved extension location for the current desktop user; no sudo.
+rm -f -- "${XDG_CONFIG_HOME:-$HOME/.config}/adguardvpn-gnome-toggle/location"
+```
+
+After successfully uninstalling the helper, you can also delete its private
+profile. This permanently removes that profile's AdGuard credentials and
+configuration; reinstalling the helper will require logging in again:
+
+```bash
+sudo rm -rf -- /var/lib/adguardvpn-gnome
+```
+
+The original AdGuard VPN CLI installation and its normal user profile remain
+installed. Uninstalling this project does not uninstall AdGuard VPN itself.
 
 ## Verification
 
