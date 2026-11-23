@@ -14,6 +14,7 @@ interface ServerMenuActions {
     connectFastest(): void;
     connectFastestInCountry(iso: string): void;
     refresh(): void;
+    openPreferences(): void;
 }
 
 export class ServerMenu {
@@ -32,6 +33,7 @@ export class ServerMenu {
         menu.addMenuItem(section);
         section.addAction('⚡ Connect to fastest server', () => actions.connectFastest());
         section.addAction('Refresh server list', () => actions.refresh());
+        section.addAction('Site Routing…', () => actions.openPreferences());
         menu.addMenuItem(this.title);
         this.backButton = createServerButton('← Back to countries', () => this.showCountries());
         this.backButton.hide();

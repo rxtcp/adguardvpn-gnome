@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.gnome.AdGuardVPN.SiteRouting
+Exec=/usr/bin/python3 -I -B /usr/libexec/adguardvpn-site-routing/launch.py serve
+User=root
+SystemdService=adguardvpn-site-routing.service

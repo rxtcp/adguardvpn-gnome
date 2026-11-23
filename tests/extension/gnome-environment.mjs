@@ -1,11 +1,13 @@
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {domainToASCII} from 'node:url';
 
 export async function createEnvironment(options = {}) {
     const calls = [], notifications = [], warnings = [], timers = new Map();
     const processes = [], actors = [], commands = [];
     let clock = 1_000_000, nextId = 1, saved = options.saved, cancelled = false;
     const cancelHandlers = new Map();
+    const dbusCalls = [], dbusResponses = [], dbusPending = [];
     class Actor {
         constructor(properties = {}) {
             this.children = []; this.handlers = new Map(); this.visible = true;
@@ -29,6 +31,24 @@ export async function createEnvironment(options = {}) {
         set_policy(...policy) { this.policy = policy; }
         set_height(height) { this.height = height; }
         get_vadjustment() { return {set_value: value => { this.scroll = value; }}; }
+        add(child) { this.add_child(child); }
+        append(child) { this.add_child(child); }
+        add_suffix(child) { this.add_child(child); }
+        remove(child) { child.destroy(); }
+        set_text(text) { this.text = text; this.emit('notify::text'); }
+        get_text() { return this.text ?? ''; }
+        set_sensitive(value) { this.sensitive = value; }
+        set_label(label) { this.label = label; }
+        set_selected(selected) { this.selected = selected; }
+        get_selected() { return this.selected ?? 4294967295; }
+        set_model(model) { this.model = model; }
+        set_default_size(width, height) { this.width = width; this.height = height; }
+        add_response(id, label) { (this.responses ??= new Map()).set(id, label); }
+        set_response_appearance(id, appearance) { (this.appearances ??= new Map()).set(id, appearance); }
+        set_default_response(id) { this.defaultResponse = id; }
+        set_close_response(id) { this.closeResponse = id; }
+        present() { this.visible = true; }
+        update_property(properties, values) { this.accessible_name = values[0]; }
     }
     class Menu extends Actor {
         constructor() { super(); this.box = new Actor(); this.actions = []; }
@@ -42,16 +62,40 @@ export async function createEnvironment(options = {}) {
         _addIndicator() { const icon = new Actor(); this.add_child(icon); return icon; }
     }
     class Cancellable {
-        connect(callback) { const id = nextId++; cancelHandlers.set(id, callback); return id; }
-        disconnect(id) { cancelHandlers.delete(id); }
-        is_cancelled() { return cancelled; }
-        cancel() { cancelled = true; for (const callback of cancelHandlers.values()) callback(); }
+        constructor() { this.cancelled = false; this.ids = new Set(); }
+        connect(callback) { const id = nextId++; cancelHandlers.set(id, callback); this.ids.add(id); return id; }
+        disconnect(id) { cancelHandlers.delete(id); this.ids.delete(id); }
+        is_cancelled() { return this.cancelled; }
+        cancel() { this.cancelled = cancelled = true; for (const id of this.ids) cancelHandlers.get(id)?.(); }
     }
+    class Variant {
+        constructor(signature, values) { this.signature = signature; this.values = values; }
+        deepUnpack() { return this.values; }
+    }
+    const dbusConnection = {
+        call(destination, path, iface, method, parameters, type, flags, timeout, cancellable, callback) {
+            const request = JSON.parse(parameters.deepUnpack()[0]);
+            dbusCalls.push({destination, path, iface, method, request, timeout});
+            const response = dbusResponses.shift() ?? {data: request.operation === 'list-providers' ? {providers: []} : {rules: []}};
+            const complete = () => callback(dbusConnection, {response, cancellable});
+            if (response.deferred) dbusPending.push(complete);
+            else queueMicrotask(complete);
+        },
+        call_finish({response, cancellable}) {
+            if (cancellable.is_cancelled()) throw new Error('Cancelled');
+            if (response.error) throw new Error(response.error);
+            const text = response.raw ?? JSON.stringify(response.envelope ?? {schema_version: 1, ok: true, data: response.data});
+            return new Variant('(s)', [text]);
+        },
+    };
     const program = name => {
         if (options.programs) return options.programs[name] ?? null;
         return name === 'adguardvpn-cli' ? '/bin/adguardvpn-cli' : null;
     };
     const Gio = {
+        BusType: {SYSTEM: 1}, DBusCallFlags: {NONE: 0},
+        bus_get(type, cancellable, callback) { queueMicrotask(() => callback(null, {})); },
+        bus_get_finish() { if (options.busError) throw new Error(options.busError); return dbusConnection; },
         Cancellable, FileIcon: Actor, SubprocessFlags: {NONE: 0, STDOUT_PIPE: 1, STDERR_PIPE: 2},
         File: {new_for_path: path => ({query_exists: () => (options.files ?? []).includes(path)})},
         Subprocess: {new(argv, flags) {
@@ -76,6 +120,7 @@ export async function createEnvironment(options = {}) {
         }},
     };
     const GLib = {
+        Variant, VariantType: {new: signature => signature}, hostname_to_ascii: domainToASCII,
         PRIORITY_DEFAULT: 0, SOURCE_REMOVE: false, SOURCE_CONTINUE: true,
         find_program_in_path: program, get_monotonic_time: () => clock,
         get_user_config_dir: () => '/config', build_filenamev: parts => parts.join('/'),
@@ -95,9 +140,21 @@ export async function createEnvironment(options = {}) {
     const gi = {Gio, GLib, GObject: {registerClass: type => type}, Clutter: {ActorAlign: {CENTER: 1}},
         St: {BoxLayout: Actor, Bin: Actor, Icon: Actor, Label: Actor, Button: Actor, ScrollView: Actor,
             PolicyType: {NEVER: 0, AUTOMATIC: 1}}};
-    const extensionBase = class { constructor() { this.dir = {get_child: () => ({get_child: () => ({})})}; } };
+    gi.Gtk = {Button: Actor, Label: Actor, TextBuffer: Actor, TextView: Actor, ScrolledWindow: Actor,
+        WrapMode: {WORD_CHAR: 1}, Align: {CENTER: 1}, AccessibleRole: {BUTTON: 1}, AccessibleProperty: {LABEL: 1},
+        StringList: {new: strings => new Actor({strings})},
+        INVALID_LIST_POSITION: 4294967295};
+    gi.Adw = {PreferencesPage: Actor, PreferencesGroup: Actor, PreferencesWindow: Actor,
+        EntryRow: Actor, ComboRow: Actor, ActionRow: Actor, MessageDialog: Actor,
+        ResponseAppearance: {DESTRUCTIVE: 2, SUGGESTED: 1}};
+    let preferencesOpened = 0;
+    const extensionBase = class {
+        constructor() { this.dir = {get_child: () => ({get_child: () => ({})})}; }
+        openPreferences() { preferencesOpened++; return Promise.resolve(); }
+    };
     const imports = {
         'resource:///org/gnome/shell/extensions/extension.js': {Extension: extensionBase},
+        'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js': {ExtensionPreferences: class {}},
         'resource:///org/gnome/shell/ui/main.js': Main,
         'resource:///org/gnome/shell/ui/popupMenu.js': {PopupMenuSection: Menu,
             PopupSeparatorMenuItem: class extends Actor { constructor(text) { super(); this.label = {text}; } }},
@@ -140,8 +197,9 @@ export async function createEnvironment(options = {}) {
     const extension = new entry.namespace.default();
     const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve)); };
     return {
-        calls, notifications, warnings, timers, processes, commands, actors, Gio, GLib,
+        calls, notifications, warnings, timers, processes, commands, actors, Gio, GLib, Gtk: gi.Gtk, Adw: gi.Adw,
         entry: {namespace}, importModule, settle, createMenu: () => new Menu(),
+        dbusCalls, dbusResponses, dbusPending, get preferencesOpened() { return preferencesOpened; },
         get saved() { return saved; }, get indicator() { return indicator; },
         get toggle() { return indicator.quickSettingsItems[0]; },
         get cancelled() { return cancelled; }, get cancelHandlerCount() { return cancelHandlers.size; },
@@ -156,7 +214,7 @@ export async function createEnvironment(options = {}) {
             if (action) action.callback();
             else {
                 const button = actors.find(actor => !actor.destroyed && actor.handlers.has('clicked') &&
-                    (actor.accessible_name === text || actor.children.some(child => child.text === text || child.children?.some(label => label.text === text))));
+                    (actor.accessible_name === text || actor.label === text || actor.children.some(child => child.text === text || child.children?.some(label => label.text === text))));
                 if (!button) throw new Error(`Button not found: ${text}`);
                 button.emit('clicked');
             }

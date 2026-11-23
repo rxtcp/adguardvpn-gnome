@@ -1,0 +1,23 @@
+[Unit]
+Description=Restore AdGuard VPN Site Routing known-address guards before networking
+DefaultDependencies=no
+After=local-fs.target nftables.service firewalld.service
+Before=network-pre.target NetworkManager.service
+Wants=network-pre.target
+RequiresMountsFor=/var/lib/adguardvpn-site-routing
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -B /usr/libexec/adguardvpn-site-routing/launch.py restore
+RemainAfterExit=yes
+StateDirectory=adguardvpn-site-routing
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=network-pre.target

@@ -7,12 +7,12 @@ export class AdGuardIndicator extends SystemIndicator {
     static { GObject.registerClass(this); }
     private readonly vpnToggle: AdGuardToggle;
 
-    constructor(planetIcon: Gio.Icon) {
+    constructor(planetIcon: Gio.Icon, openPreferences: () => void) {
         super();
         const icon = this._addIndicator();
         icon.gicon = planetIcon;
         icon.visible = false;
-        this.vpnToggle = new AdGuardToggle(connected => { icon.visible = connected; }, planetIcon);
+        this.vpnToggle = new AdGuardToggle(connected => { icon.visible = connected; }, planetIcon, openPreferences);
         this.quickSettingsItems.push(this.vpnToggle);
     }
 
