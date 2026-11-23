@@ -197,6 +197,8 @@ The backend journals known-address intent and pending objects before writes.
 It installs a dual-family nftables destination/interface-index guard before
 allowing routes, chooses unused tables and priorities after examining the live
 policy, and installs terminal unreachable rules behind each owned lookup.
+Kernel snapshots request numeric IDs, so administrator-defined table/protocol
+aliases cannot hide an occupied table or change an approved object's identity.
 Every destination is checked using kernel route lookup and actual interface
 index/source state before its egress is allowed. Direct uses a physical gateway,
 not an assumption that the main table bypasses VPNs. Only exact owned objects

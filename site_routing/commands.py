@@ -20,9 +20,24 @@ class CommandRunner:
         return result.stdout
 
     def read_ip(self, family: int, *args: str) -> list:
-        value = json.loads(self.run([IP, f'-{family}', '-j', *args]))
+        value = json.loads(self.run([IP, '-N', f'-{family}', '-j', *args]))
         if not isinstance(value, list):
             raise ValueError('Invalid iproute2 response.')
+        protocols = {'0': 'unspec', '2': 'kernel', '3': 'boot', '4': 'static'}
+        scopes = {'0': 'global', '200': 'site', '253': 'link', '254': 'host', '255': 'nowhere'}
+        types = {'1': 'lookup' if args[:1] == ('rule',) else 'unicast', '6': 'blackhole',
+                 '7': 'unreachable', '8': 'prohibit'}
+        for row in value:
+            if not isinstance(row, dict):
+                raise ValueError('Invalid iproute2 object.')
+            if 'table' in row:
+                table = row['table']
+                if type(table) not in (str, int) or not str(table).isdecimal() or not 0 <= int(table) <= 4294967295:
+                    raise ValueError('Invalid numeric routing table.')
+                row['table'] = int(table)
+            for field, names in (('protocol', protocols), ('scope', scopes), ('type', types), ('action', types)):
+                if field in row:
+                    row[field] = names.get(str(row[field]), row[field])
         return value
 
     def write_ip(self, family: int, *args: str) -> None:

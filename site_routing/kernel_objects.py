@@ -80,11 +80,26 @@ class OwnedObject:
         except ValueError:
             return False
         if self.kind == 'route':
-            return table_number(value.get('table', 254)) == self.table and value.get('dev') == self.path.interface and value.get('prefsrc', value.get('src')) == self.path.source and value.get('gateway', '') == self.path.gateway and not value.get('multipath')
-        if value.get('src', 'all') != 'all' or any(key in value for key in ('fwmark', 'iif', 'oif', 'uidrange', 'ipproto', 'sport', 'dport')) or value.get('flags'):
+            allowed_fields = {'dst', 'table', 'protocol', 'dev', 'prefsrc', 'src', 'gateway', 'type', 'metric', 'scope', 'pref', 'flags'}
+            scope = 'global' if self.path.gateway or self.family == 6 else 'link'
+            flags = {'linkdown', 'onlink'} if self.path.gateway else {'linkdown'}
+            metric = 1024 if self.family == 6 else 0
+            if set(value) - allowed_fields or value.get('type', 'unicast') != 'unicast' or set(value.get('flags', [])) - flags:
+                return False
+            if (value.get('metric', metric) != metric or value.get('pref', 'medium') != 'medium'
+                    or value.get('scope', scope) not in ({'global', 'universe'} if scope == 'global' else {'link'})):
+                return False
+            return (table_number(value.get('table', 254)) == self.table
+                    and value.get('dev') == self.path.interface
+                    and value.get('prefsrc', value.get('src')) == self.path.source
+                    and value.get('gateway', '') == self.path.gateway)
+        allowed_fields = {'priority', 'src', 'dst', 'to', 'table', 'protocol', 'flags', 'action', 'type'}
+        if set(value) - allowed_fields or value.get('src', 'all') != 'all' or value.get('flags'):
             return False
         action = value.get('action', value.get('type', 'lookup'))
-        return value.get('priority') == self.priority and (action == 'unreachable' if self.kind == 'block' else table_number(value.get('table')) == self.table)
+        return value.get('priority') == self.priority and (
+            action == 'unreachable' and value.get('table', 0) in (0, '0', 'unspec') if self.kind == 'block'
+            else action == 'lookup' and table_number(value.get('table')) == self.table)
 
 
 def choose_priority(rules: list[dict]) -> int:

@@ -10,7 +10,13 @@ class PolicyConflict(RuntimeError):
 
 
 def signature(kind: str, family: int, row: dict) -> str:
-    return json.dumps({'kind': kind, 'family': family, 'data': row}, sort_keys=True)
+    data = dict(row)
+    if 'table' in data and table_number(data['table']) >= 0:
+        data['table'] = table_number(data['table'])
+    if 'protocol' in data:
+        protocol = str(data['protocol'])
+        data['protocol'] = {'kernel': '2', 'boot': '3', 'static': '4'}.get(protocol, protocol)
+    return json.dumps({'kind': kind, 'family': family, 'data': data}, sort_keys=True)
 
 
 def foreign_overlaps(snapshots: dict, previous: list, addresses) -> list[dict]:

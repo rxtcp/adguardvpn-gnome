@@ -92,7 +92,7 @@ class NamespaceRoutingTests(unittest.TestCase):
         backend.apply({}, manifest, INSTALLATION)
         self.assertTrue(any(row.get('priority') == 900 for row in runner.read_ip(4, 'rule', 'show')))
         self.assertEqual(runner.read_ip(4, 'route', 'get', '198.51.100.8')[0]['dev'], 'fixturevpn')
-        self.assertTrue(any(row.get('priority') == 1000 and row.get('table') == 880 for row in runner.read_ip(4, 'rule', 'show')))
+        self.assertTrue(any(row.get('priority') == 1000 and str(row.get('table')) == '880' for row in runner.read_ip(4, 'rule', 'show')))
         self.assertFalse(any(row.get('table', {}).get('name') == 'adguardvpn_site_routing' for row in runner.nft_json('list', 'tables')['nftables']))
         # The boot phase restores a deny-only table before any daemon/provider discovery.
         backend.block(assignments, INSTALLATION)

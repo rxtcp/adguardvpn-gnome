@@ -34,10 +34,26 @@ class QueuedExecutor:
 
 
 class CommandTests(unittest.TestCase):
+    def test_numeric_kernel_output_has_stable_ids_and_canonical_protocol_scope_action_names(self):
+        runner = commands.CommandRunner()
+        rows = [{'table': '40000', 'protocol': '196', 'scope': '253', 'type': '1'},
+                {'table': 880, 'protocol': '4', 'scope': '0', 'type': '7'}, {'dst': 'default'}]
+        with patch.object(runner, 'run', return_value=json.dumps(rows)):
+            self.assertEqual(runner.read_ip(4, 'route', 'show'), [
+                {'table': 40000, 'protocol': '196', 'scope': 'link', 'type': 'unicast'},
+                {'table': 880, 'protocol': 'static', 'scope': 'global', 'type': 'unreachable'}, {'dst': 'default'}])
+        with patch.object(runner, 'run', return_value='[{"action":"1"},{"action":"7"}]'):
+            self.assertEqual(runner.read_ip(6, 'rule', 'show'), [{'action': 'lookup'}, {'action': 'unreachable'}])
+        for malformed in ('[42]', '[{"table":true}]', '[{"table":"unknown-alias"}]',
+                          '[{"table":-1}]', '[{"table":4294967296}]'):
+            with patch.object(runner, 'run', return_value=malformed), self.assertRaises(ValueError):
+                runner.read_ip(4, 'route', 'show')
+
     def test_fixed_commands_bound_output_timeout_environment_and_no_shell(self):
         runner = commands.CommandRunner()
         with patch.object(commands.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='[]')) as run:
             self.assertEqual(runner.read_ip(6, 'rule', 'show'), [])
+            self.assertEqual(run.call_args.args[0], ['/usr/sbin/ip', '-N', '-6', '-j', 'rule', 'show'])
             self.assertEqual(runner.read_links(), [])
             runner.write_ip(4, 'rule', 'add')
             runner.nft_apply('fixture transaction')

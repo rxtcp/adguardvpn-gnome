@@ -8,12 +8,19 @@ from site_routing.kernel import KernelBackend
 from site_routing.kernel_objects import OwnedObject, choose_priority, choose_tables, table_number
 from site_routing.legacy_objects import legacy_arguments
 from site_routing.models import Assignment, NetworkPath
-from site_routing.policy_inspection import foreign_overlaps
+from site_routing.policy_inspection import foreign_overlaps, signature
 from site_routing_fakes import PATH4
 from test_site_routing_kernel import INSTALLATION, KernelFixture
 
 
 class PolicyOwnershipTests(unittest.TestCase):
+    def test_migration_identity_survives_numeric_protocol_and_table_rendering(self):
+        named = {'dst': '198.51.100.8', 'table': 'main', 'protocol': 'static'}
+        numeric = {**named, 'table': 254, 'protocol': 4}
+        self.assertEqual(signature('route', 4, named), signature('route', 4, numeric))
+        self.assertNotEqual(signature('route', 4, {**named, 'table': 'unknown-one'}),
+                            signature('route', 4, {**named, 'table': 'unknown-two'}))
+
     def test_objects_validate_allocation_ranges_and_compare_every_ownership_selector(self):
         for value in ({'kind': 'block', 'address': '198.51.100.8', 'priority': True},
                       {'kind': 'lookup', 'address': '198.51.100.8', 'priority': 2, 'table': 880},
@@ -25,7 +32,8 @@ class PolicyOwnershipTests(unittest.TestCase):
         row = {'dst': '198.51.100.8/32', 'priority': 998, 'table': 40000, 'protocol': 196}
         self.assertTrue(lookup.matches(row))
         for changed in ({'dst': 'all'}, {'protocol': 'static'}, {'dst': 'bad'}, {'dst': '198.51.100.9/32'},
-                        {'src': '192.0.2.0/24'}, {'fwmark': 1}, {'flags': ['not']}, {'priority': 999}):
+                        {'src': '192.0.2.0/24'}, {'fwmark': 1}, {'flags': ['not']}, {'priority': 999},
+                        {'tos': 16}, {'suppress_prefixlength': 0}, {'action': 'blackhole'}):
             self.assertFalse(lookup.matches({**row, **changed}))
         self.assertEqual(table_number('unknown'), -1)
         self.assertEqual(table_number('40000'), 40000)
@@ -35,6 +43,13 @@ class PolicyOwnershipTests(unittest.TestCase):
         self.assertEqual(route.arguments('add')[route.arguments('add').index('via') + 1], path.gateway)
         self.assertIn('table', lookup.arguments('del'))
         self.assertIn('unreachable', OwnedObject('block', row['dst'].split('/')[0], 999).arguments('add'))
+        owned_route = {'dst': '198.51.100.8/32', 'table': 40000, 'protocol': 196,
+            'dev': path.interface, 'prefsrc': path.source, 'gateway': path.gateway, 'flags': ['onlink']}
+        self.assertTrue(route.matches(owned_route))
+        self.assertTrue(route.matches({**owned_route, 'flags': ['onlink', 'linkdown']}))
+        for changed in ({'metric': 5}, {'tos': 16}, {'type': 'blackhole'}, {'flags': ['onlink', 'pervasive']},
+                        {'pref': 'high'}, {'scope': 'host'}):
+            self.assertFalse(route.matches({**owned_route, **changed}), changed)
         for journal in ({'a': True}, {'a': 880}, {'a': 40000, 'b': 40000}):
             with self.assertRaises(ValueError): choose_tables({'a'}, journal, [], [])
         with self.assertRaises(RuntimeError): choose_tables({'new'}, {}, [{'table': value} for value in range(40000, 50000)], [])
@@ -65,6 +80,19 @@ class PolicyOwnershipTests(unittest.TestCase):
             KernelBackend(runner).apply({'198.51.100.8': Assignment('vpn', PATH4)}, manifest, INSTALLATION)
         self.assertIn(foreign, runner.current[4]['route'])
         self.assertFalse(any(event[0] == 'ip' for event in runner.events))
+
+    def test_cleanup_refuses_a_route_whose_attributes_were_changed_outside_the_manager(self):
+        runner = KernelFixture(); backend = KernelBackend(runner)
+        manifest = backend.apply({'198.51.100.8': Assignment('vpn', PATH4)},
+            {'objects': [], 'known': ['198.51.100.8'], 'tables': {}, 'priority': 0}, INSTALLATION)
+        runner.current[4]['route'][0]['metric'] = 5
+        changed = copy.deepcopy(runner.current)
+        runner.events.clear()
+        with self.assertRaisesRegex(RuntimeError, 'foreign route'):
+            backend.apply({}, manifest, INSTALLATION)
+        self.assertEqual(runner.current, changed)
+        self.assertTrue(runner.events)
+        self.assertTrue(all(event[0] == 'nft' for event in runner.events))
 
     def test_lost_source_or_interface_index_cannot_verify_a_route_and_diagnostics_are_sanitized(self):
         runner, backend = KernelFixture(), None
