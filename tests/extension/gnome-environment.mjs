@@ -7,7 +7,7 @@ export async function createEnvironment(options = {}) {
     const processes = [], actors = [], commands = [];
     let clock = 1_000_000, nextId = 1, saved = options.saved, cancelled = false;
     const cancelHandlers = new Map();
-    const dbusCalls = [], dbusResponses = [], dbusPending = [];
+    const dbusCalls = [], dbusResponses = [], dbusPending = [], dbusBusPending = [];
     class Actor {
         constructor(properties = {}) {
             this.children = []; this.handlers = new Map(); this.visible = true;
@@ -85,7 +85,7 @@ export async function createEnvironment(options = {}) {
             if (cancellable.is_cancelled()) throw new Error('Cancelled');
             if (response.error) throw new Error(response.error);
             const text = response.raw ?? JSON.stringify(response.envelope ?? {schema_version: 1, ok: true, data: response.data});
-            return new Variant('(s)', [text]);
+            return new Variant('(s)', response.values ?? [text]);
         },
     };
     const program = name => {
@@ -94,7 +94,11 @@ export async function createEnvironment(options = {}) {
     };
     const Gio = {
         BusType: {SYSTEM: 1}, DBusCallFlags: {NONE: 0},
-        bus_get(type, cancellable, callback) { queueMicrotask(() => callback(null, {})); },
+        bus_get(type, cancellable, callback) {
+            const complete = () => callback(null, {});
+            if (options.busDeferred) dbusBusPending.push(complete);
+            else queueMicrotask(complete);
+        },
         bus_get_finish() { if (options.busError) throw new Error(options.busError); return dbusConnection; },
         Cancellable, FileIcon: Actor, SubprocessFlags: {NONE: 0, STDOUT_PIPE: 1, STDERR_PIPE: 2},
         File: {new_for_path: path => ({query_exists: () => (options.files ?? []).includes(path)})},
@@ -199,7 +203,7 @@ export async function createEnvironment(options = {}) {
     return {
         calls, notifications, warnings, timers, processes, commands, actors, Gio, GLib, Gtk: gi.Gtk, Adw: gi.Adw,
         entry: {namespace}, importModule, settle, createMenu: () => new Menu(),
-        dbusCalls, dbusResponses, dbusPending, get preferencesOpened() { return preferencesOpened; },
+        dbusCalls, dbusResponses, dbusPending, dbusBusPending, get preferencesOpened() { return preferencesOpened; },
         get saved() { return saved; }, get indicator() { return indicator; },
         get toggle() { return indicator.quickSettingsItems[0]; },
         get cancelled() { return cancelled; }, get cancelHandlerCount() { return cancelHandlers.size; },

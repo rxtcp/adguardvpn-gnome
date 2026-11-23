@@ -46,9 +46,13 @@ class NetworkPath:
     gateway: str = ''
 
     def __post_init__(self):
-        if not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.:@-]{0,14}', self.interface) or type(self.ifindex) is not int or self.ifindex < 1:
+        if not isinstance(self.interface, str) or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.:@-]{0,14}', self.interface) or type(self.ifindex) is not int or not 1 <= self.ifindex <= 4294967295:
             raise ValueError('Unverified network interface.')
+        if not isinstance(self.source, str) or not isinstance(self.gateway, str):
+            raise ValueError('Network addresses must be strings.')
         address = ipaddress.ip_address(self.source)
+        if address.is_unspecified or address.is_multicast or address.is_loopback or address.is_link_local:
+            raise ValueError('A usable source address is required.')
         if self.gateway and ipaddress.ip_address(self.gateway).version != address.version:
             raise ValueError('Gateway and source families differ.')
 
@@ -61,6 +65,7 @@ class Provider:
     dns: tuple[str, ...] = ()
     users: tuple[str, ...] = ()
     detail: str = ''
+    allowed_networks: tuple[str, ...] | None = None
 
     def public(self) -> dict:
         return {'target': self.target.public(), 'name': self.name, 'active': bool(self.paths),

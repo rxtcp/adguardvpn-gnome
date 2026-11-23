@@ -16,7 +16,8 @@ def entry_address(family: int, field: str, row) -> str | None:
         if field == 'route-data':
             address, prefix = row['dest'], row['prefix']
         elif field == 'routing-rules':
-            network = ipaddress.ip_network(row.get('to', ''), strict=False)
+            destination = row.get('to', '')
+            network = ipaddress.ip_network(f'{destination}/{row["to-len"]}' if 'to-len' in row and '/' not in destination else destination, strict=False)
             address, prefix = str(network.network_address), network.prefixlen
         elif family == 4:
             address, prefix = socket.inet_ntop(socket.AF_INET, struct.pack('=I', row[0])), row[1]

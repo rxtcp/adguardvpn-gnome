@@ -1,9 +1,9 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {errorMessage} from '../domain/cli-output.js';
-import {parseRoutingResponse} from './domain.js';
-import * as response from './responses.js';
-import type {RoutingApi, RoutingDiagnostics, RoutingMutation, RoutingRequest, RoutingRule, VpnProvider} from './types.js';
+import {parseRoutingResponse} from '../domain/site-routing.js';
+import * as response from '../domain/site-routing-responses.js';
+import type {RoutingApi, RoutingDiagnostics, RoutingMutation, RoutingRequest, RoutingRule, VpnProvider} from '../domain/site-routing-types.js';
 
 const BUS = 'org.gnome.AdGuardVPN.SiteRouting';
 const PATH = '/org/gnome/AdGuardVPN/SiteRouting';

@@ -1,6 +1,7 @@
 import copy
 import json
 import unittest
+from unittest.mock import Mock, patch
 
 from site_routing.migrations import MigrationManager, settings_removals
 from site_routing_fakes import MemoryStore, NM_ID, RULE_ID, TARGET
@@ -22,6 +23,7 @@ class MigrationTests(unittest.TestCase):
         profile = self.profile
         class Reader:
             def profiles(self): return [profile]
+            def migration_profiles(self): return [profile]
             def render_without(self, serialized, patches):
                 settings = json.loads(serialized)
                 for patch in patches:
@@ -75,3 +77,78 @@ class MigrationTests(unittest.TestCase):
         patches = settings_removals(self.profile['settings'], ['198.51.100.8'])
         self.assertEqual(len(patches), 2)
         self.assertEqual(patches[0]['indices'], [0])
+
+    def test_modern_nm_rule_uses_separate_to_length_and_diff_contains_exact_fields(self):
+        self.profile['settings']['ipv4']['routing-rules'] = [{'to': '198.51.100.8', 'to-len': 32, 'table': 777, 'priority': 900}]
+        self.profile['serialized'] = json.dumps(self.profile['settings'])
+        patches = settings_removals(self.profile['settings'], self.rule['addresses'])
+        self.assertEqual(len(patches), 2)
+        plan = self.manager.preview(self.state, self.rule)
+        self.assertIn('"priority": 900', '\n'.join(plan['changes']))
+        self.assertIn('"table": 777', '\n'.join(plan['changes']))
+
+    def test_same_ip_but_different_saved_table_is_not_permission_to_delete_foreign_policy(self):
+        self.profile['settings']['ipv4']['routing-rules'][0]['table'] = 778
+        self.profile['serialized'] = json.dumps(self.profile['settings'])
+        with self.assertRaisesRegex(ValueError, 'matched exactly'):
+            self.manager.preview(self.state, self.rule)
+        self.assertEqual(self.kernel.events, [])
+
+    def test_existing_applied_plan_is_stable_and_unrelated_private_profiles_are_not_backed_up(self):
+        with patch.object(self.reader, 'migration_profiles', return_value=[{**self.profile, 'users': ('anotheruser',)},
+                {**self.profile, 'settings': {}}]):
+            self.assertIsNone(self.manager.preview(self.state, self.rule))
+        first = self.manager.preview(self.state, self.rule)
+        other = {**self.rule, 'id': '00000000-0000-4000-8000-000000000003'}
+        self.manager.preview(self.state, other)
+        second = self.manager.preview(self.state, self.rule)
+        self.assertNotIn(first['id'], self.state['migrations'])
+        self.assertEqual(len(self.state['migrations']), 2)
+        self.manager.apply(self.state, self.rule, {'id': second['id'], 'stage': 'protect'})
+        self.assertEqual(self.manager.preview(self.state, self.rule)['id'], second['id'])
+
+    def test_stale_rule_identity_removed_profile_and_unapplied_rollback_are_refused(self):
+        plan = self.manager.preview(self.state, self.rule)
+        with self.assertRaisesRegex(ValueError, 'stale'):
+            self.manager.apply(self.state, self.rule, {'id': 'missing', 'stage': 'protect'})
+        with patch.object(self.reader, 'profiles', return_value=[]):
+            with self.assertRaisesRegex(ValueError, 'profile was removed'):
+                self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        with self.assertRaisesRegex(ValueError, 'no applied migration'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
+
+    def test_failed_retirement_retains_backup_and_guard_then_can_retry_or_rollback(self):
+        from site_routing.planning import plan_rules
+        from site_routing_fakes import Registry
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        self.rule['status'] = 'blocked-offline'
+        self.kernel.verify_replacement = Mock(return_value=False)
+        with self.assertRaisesRegex(ValueError, 'active protected replacement'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.kernel.verify_replacement.return_value = True
+        self.profile['settings']['connection']['id'] = 'User changed after protect'
+        with self.assertRaisesRegex(ValueError, 'overwrite was refused'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'failed')
+        plan_rules([self.rule], Registry().discover())
+        self.assertEqual(self.rule['status'], 'apply-error')
+        self.assertEqual(self.kernel.events, ['block'])
+        backup = self.state['migrations'][plan['id']]['profiles'][0]
+        self.profile['settings'] = json.loads(backup['before'])
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.assertNotIn('migration_error', self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
+        self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'rolled-back')
+
+    def test_reassignment_cannot_reuse_an_old_protection_plan_but_can_restore_its_backup(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        self.rule['target'] = {'kind': 'direct', 'id': 'direct'}
+        for stage in ('protect', 'retire'):
+            with self.assertRaisesRegex(ValueError, 'stale'):
+                self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': stage})
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
+        self.assertEqual(self.state['rules'], [])
+        self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'rolled-back')

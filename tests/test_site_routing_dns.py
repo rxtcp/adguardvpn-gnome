@@ -51,3 +51,14 @@ class DnsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'DNS'):
             DnsResolver(factory=factory).resolve('one.example', provider)
         self.assertEqual(factories, [False])
+
+    def test_inactive_profile_uses_system_resolver_and_empty_answers_remain_empty(self):
+        calls = []
+        class Resolver:
+            def resolve(self, domain, family, **kwargs):
+                calls.append(family)
+                raise dns.resolver.NoAnswer
+        factory = lambda configure: calls.append(configure) or Resolver()
+        provider = Provider(Target('direct', 'direct'), 'Inactive', dns=('192.0.2.53',))
+        self.assertEqual(DnsResolver(factory).resolve('one.example', provider), ((), 30))
+        self.assertEqual(calls, [True, 'A', 'AAAA'])

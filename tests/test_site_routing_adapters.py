@@ -89,6 +89,7 @@ class NetworkManagerAdapterTests(unittest.TestCase):
         self.assertEqual(snapshot['active'][0]['interfaces'], ['fixturevpn'])
         self.assertEqual(snapshot['active'][0]['ip6'], {})
         self.assertEqual(snapshot['active'][0]['ip4']['AddressData'][0]['address'], '192.0.2.2')
+        self.assertEqual(self.reader.migration_profiles()[0]['interfaces'], ['fixturevpn'])
         profile = snapshot['profiles'][0]
         serialized, settings = self.reader.render_without(profile['serialized'], [{'setting': 'ipv4', 'field': 'route-data', 'indices': [0]}])
         self.reader.update(profile, serialized)
@@ -123,6 +124,9 @@ class ProtectedAdguardAdapterTests(unittest.TestCase):
                  patch.object(adguard, 'Path', return_value=Proc()), patch.object(adguard, 'verify_path'):
                 result = adguard.protected_tunnel(bus, runner)
                 self.assertEqual(result['interfaces'], ['fixturevpn'])
+                process.stat = lambda: SimpleNamespace(st_uid=1000)
+                self.assertFalse(adguard.protected_tunnel(bus, runner)['connected'])
+                process.stat = lambda: SimpleNamespace(st_uid=0)
                 runner.run = lambda args: 'Disconnected'
                 self.assertFalse(adguard.protected_tunnel(bus, runner)['connected'])
                 runner.run = lambda args: 'Connected to Miami'

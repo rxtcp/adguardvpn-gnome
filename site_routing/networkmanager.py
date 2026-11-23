@@ -29,6 +29,11 @@ class NetworkManagerReader:
     def update(self, profile: dict, serialized: str) -> None:
         self.bus.update_settings(profile['path'], serialized)
 
+    def migration_profiles(self) -> list[dict]:
+        snapshot = self.snapshot()
+        return [{**profile, 'interfaces': [name for active in snapshot['active'] if active['uuid'] == profile['uuid']
+                                           for name in active['interfaces']]} for profile in snapshot['profiles']]
+
     def snapshot(self) -> dict:
         links = self.runner.read_links()
         try:

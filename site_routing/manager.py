@@ -91,12 +91,17 @@ class RoutingManager:
         with self._mutex, self.store.lock():
             state = self.store.load()
             known = sorted(set(state['kernel']['known']) | {address for rule in state['rules'] for address in rule['addresses']})
-            if known:
-                self.kernel.block(known, state['installation_id'])
-            for rule in state['rules']:
-                rule['status'], rule['detail'] = 'apply-error', 'Reconciliation failed; known IPs have been blocked.'
-            self.store.save(state)
-            self._publish(state)
+            confirmed = False
+            try:
+                if known:
+                    self.kernel.block(known, state['installation_id'])
+                confirmed = True
+            finally:
+                for rule in state['rules']:
+                    rule['status'] = 'apply-error'
+                    rule['detail'] = 'Reconciliation failed; known IPs have been blocked.' if confirmed else 'Guard installation failed; protection is not confirmed.'
+                self._publish(state)
+                self.store.save(state)
 
     def diagnose(self, identity: str, uid: int) -> dict:
         with self._mutex, self.store.lock():

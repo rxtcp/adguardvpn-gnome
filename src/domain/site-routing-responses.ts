@@ -1,5 +1,5 @@
-import {isRoutingStatus, record} from './domain.js';
-import type {MigrationPlan, RoutingDiagnostics, RoutingRule, RoutingTarget, VpnProvider} from './types.js';
+import {isRoutingStatus, record} from './site-routing.js';
+import type {MigrationPlan, ObservedRoute, RoutingDiagnostics, RoutingRule, RoutingTarget, VpnProvider} from './site-routing-types.js';
 
 function text(value: unknown, maximum = 4096): string {
     if (typeof value !== 'string' || value.length > maximum)
@@ -56,6 +56,18 @@ export function rule(value: unknown): RoutingRule {
         ipv6_count: count(item.ipv6_count), updated_at: count(item.updated_at)};
 }
 
+function route(value: unknown): ObservedRoute {
+    const item = record(value);
+    const result: ObservedRoute = {address: text(item.address, 45)};
+    for (const key of ['dev', 'gateway', 'type'] as const) {
+        if (item[key] !== undefined)
+            result[key] = text(item[key]);
+    }
+    if (item.table !== undefined)
+        result.table = typeof item.table === 'number' ? count(item.table) : text(item.table);
+    return result;
+}
+
 export function diagnostics(value: unknown): RoutingDiagnostics {
     const item = record(value);
     let migration: MigrationPlan | null = null;
@@ -64,5 +76,5 @@ export function diagnostics(value: unknown): RoutingDiagnostics {
         migration = {id: identity(plan.id), stage: text(plan.stage, 32), changes: list(plan.changes, entry => text(entry), 4096)};
     }
     return {rule: rule(item.rule), addresses: list(item.addresses, address => text(address, 45), 256),
-        protection: text(item.protection), migration};
+        routes: list(item.routes, route, 256), protection: text(item.protection), migration};
 }

@@ -42,6 +42,10 @@ class NamespaceRoutingTests(unittest.TestCase):
         self.command('route', 'add', 'default', 'dev', 'fixturewan')
         self.command('-6', 'route', 'add', 'default', 'dev', 'fixturewan')
         path4, path6 = self.tunnel()
+        # A foreign VPN owns the ordinary default path and its own routing table.
+        for family in (4, 6):
+            self.command(f'-{family}', 'route', 'add', 'default', 'table', '880', 'dev', 'fixturevpn')
+            self.command(f'-{family}', 'rule', 'add', 'priority', '1000', 'table', '880')
         runner, backend = CommandRunner(), KernelBackend(CommandRunner())
         assignments = {'198.51.100.8': Assignment('fixture-vpn', path4),
                        '2001:db8::8': Assignment('fixture-vpn', path6)}
@@ -50,18 +54,30 @@ class NamespaceRoutingTests(unittest.TestCase):
         for family, address in ((4, '198.51.100.8'), (6, '2001:db8::8')):
             self.assertEqual(runner.read_ip(family, 'route', 'get', address)[0]['dev'], 'fixturevpn')
             self.assertTrue(any(row.get('action', row.get('type')) == 'unreachable' for row in runner.read_ip(family, 'rule', 'show')))
+        direct4 = NetworkPath('fixturewan', socket.if_nametoindex('fixturewan'), '198.18.0.2', '198.18.0.1')
+        direct6 = NetworkPath('fixturewan', socket.if_nametoindex('fixturewan'), '2001:db8:2::2', '2001:db8:2::1')
+        manifest = backend.apply({'198.51.100.8': Assignment('direct', direct4),
+            '2001:db8::8': Assignment('direct', direct6)}, manifest, INSTALLATION)
+        for family, address, gateway in ((4, '198.51.100.8', '198.18.0.1'), (6, '2001:db8::8', '2001:db8:2::1')):
+            route = runner.read_ip(family, 'route', 'get', address)[0]
+            self.assertEqual((route['dev'], route['gateway']), ('fixturewan', gateway))
+        self.assertEqual(runner.read_ip(4, 'route', 'get', '203.0.113.10')[0]['dev'], 'fixturevpn')
+        manifest = backend.apply(assignments, manifest, INSTALLATION)
         self.command('link', 'del', 'fixturevpn')
         for family, address in ((4, '198.51.100.8'), (6, '2001:db8::8')):
             with self.assertRaises(RuntimeError):
                 runner.read_ip(family, 'route', 'get', address)
         # A foreign higher-priority policy cannot bypass the independent egress guard.
-        self.command('-4', 'rule', 'add', 'priority', '1', 'to', '198.51.100.8/32', 'table', 'main')
-        self.assertEqual(runner.read_ip(4, 'route', 'get', '198.51.100.8')[0]['dev'], 'fixturewan')
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as outgoing:
-            with self.assertRaises(OSError):
-                outgoing.sendto(b'fixture', ('198.51.100.8', 443))
-        self.command('-4', 'rule', 'del', 'priority', '1', 'to', '198.51.100.8/32', 'table', 'main')
+        for family, address, prefix, socket_family in ((4, '198.51.100.8', 32, socket.AF_INET),
+                (6, '2001:db8::8', 128, socket.AF_INET6)):
+            self.command(f'-{family}', 'rule', 'add', 'priority', '1', 'to', f'{address}/{prefix}', 'table', 'main')
+            self.assertEqual(runner.read_ip(family, 'route', 'get', address)[0]['dev'], 'fixturewan')
+            with socket.socket(socket_family, socket.SOCK_DGRAM) as outgoing:
+                with self.assertRaises(OSError): outgoing.sendto(b'fixture', (address, 443))
+            self.command(f'-{family}', 'rule', 'del', 'priority', '1', 'to', f'{address}/{prefix}', 'table', 'main')
         replacement4, replacement6 = self.tunnel('192.0.2.4', '2001:db8:1::4')
+        for family in (4, 6):
+            self.command(f'-{family}', 'route', 'add', 'default', 'table', '880', 'dev', 'fixturevpn')
         self.assertNotEqual(path4.ifindex, replacement4.ifindex)
         assignments = {'198.51.100.8': Assignment('fixture-vpn', replacement4),
                        '2001:db8::8': Assignment('fixture-vpn', replacement6)}
@@ -75,12 +91,14 @@ class NamespaceRoutingTests(unittest.TestCase):
         self.command('-4', 'rule', 'add', 'priority', '900', 'to', '203.0.113.9/32', 'table', 'main')
         backend.apply({}, manifest, INSTALLATION)
         self.assertTrue(any(row.get('priority') == 900 for row in runner.read_ip(4, 'rule', 'show')))
-        self.assertEqual(runner.read_ip(4, 'route', 'get', '198.51.100.8')[0]['dev'], 'fixturewan')
+        self.assertEqual(runner.read_ip(4, 'route', 'get', '198.51.100.8')[0]['dev'], 'fixturevpn')
+        self.assertTrue(any(row.get('priority') == 1000 and row.get('table') == 880 for row in runner.read_ip(4, 'rule', 'show')))
         self.assertFalse(any(row.get('table', {}).get('name') == 'adguardvpn_site_routing' for row in runner.nft_json('list', 'tables')['nftables']))
         # The boot phase restores a deny-only table before any daemon/provider discovery.
         backend.block(assignments, INSTALLATION)
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as outgoing:
-            with self.assertRaises(OSError): outgoing.sendto(b'fixture', ('198.51.100.8', 443))
+        for socket_family, address in ((socket.AF_INET, '198.51.100.8'), (socket.AF_INET6, '2001:db8::8')):
+            with socket.socket(socket_family, socket.SOCK_DGRAM) as outgoing:
+                with self.assertRaises(OSError): outgoing.sendto(b'fixture', (address, 443))
 
 
 if __name__ == '__main__':

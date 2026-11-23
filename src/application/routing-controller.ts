@@ -1,6 +1,6 @@
 import {errorMessage} from '../domain/cli-output.js';
-import {normalizeSiteDomain} from './domain.js';
-import type {MigrationPlan, MigrationStage, RoutingApi, RoutingDiagnostics, RoutingRule, RoutingTarget, VpnProvider} from './types.js';
+import {normalizeSiteDomain} from '../domain/site-routing.js';
+import type {MigrationPlan, MigrationStage, RoutingApi, RoutingDiagnostics, RoutingRule, RoutingTarget, VpnProvider} from '../domain/site-routing-types.js';
 
 export interface RoutingView {
     providers(value: VpnProvider[]): void;

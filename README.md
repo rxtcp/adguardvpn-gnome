@@ -8,6 +8,10 @@ CLI v1.8.3. GNOME version-specific compatibility and other Linux distributions
 have not yet been independently tested. This is a community project, not an
 official AdGuard or GNOME extension.
 
+The new **Site Routing** system component is experimental. Its automated tests
+include isolated Linux routing/firewall checks; real Fedora boot and dual-VPN
+acceptance remain pending. See [Site Routing](#site-routing-experimental).
+
 ## Features
 
 - Toggle AdGuard VPN from GNOME Quick Settings with a globe icon.
@@ -15,12 +19,15 @@ official AdGuard or GNOME extension.
 - Browse countries and scroll through cities; display available ping measurements.
 - Connect to the global fastest location using AdGuard VPN CLI's `connect -f`.
 - Use the ⚡ button next to a country to connect to the city with its lowest reported ping.
-- Do not edit existing corporate OpenVPN or NetworkManager connection profiles.
-  System-wide routing and DNS still need to be verified when both VPNs are on.
+- Keep existing OpenVPN/NM profiles unchanged during ordinary toggle use.
+  Optional Site Routing migration changes only separately reviewed host entries.
+  System-wide routing and DNS still need verification with both VPNs on.
 - When the protected systemd controller is installed, detect connection state
   from the current AdGuard service journal (the CLI may not see a `--no-fork`
   process through its PID-file-based `status` command).
 - English user interface.
+- Experimental exact-host assignments to saved NM VPNs, protected AdGuard or a
+  physical gateway through standard extension preferences and an optional service.
 
 See [extension/README.md](extension/README.md) for UI details and troubleshooting.
 
@@ -90,10 +97,66 @@ connect/disconnect may then require administrator authorization.
 The removal procedure, including optional deletion of saved login data, is
 described in [Uninstallation](#uninstallation).
 
+## Site Routing (experimental)
+
+Open **Site Routing…** in the toggle menu to assign an exact FQDN or HTTP(S) URL
+host to a saved NM VPN (including inactive OpenVPN/WireGuard), protected AdGuard,
+or Direct. It never starts the selected VPN automatically. If the target is
+unavailable, known destination IPs remain blocked. Shared IPs, unknown cached
+addresses, application DoH/DoT and DNS changes before synchronization limit this
+IP-based guarantee; DNS query privacy is not separately guaranteed.
+
+This requires a **separate** optional system component. After installing the
+extension, review [docs/site-routing.md](docs/site-routing.md), then run from
+the repository root on the Fedora test machine:
+
+```bash
+sudo dnf install python3-gobject python3-dns python3-idna iproute nftables
+sudo ./scripts/install-site-routing.sh
+gnome-extensions prefs adguardvpn-toggle@chatgpt.local
+```
+
+The AdGuard target additionally needs the authenticated protected helper above;
+NM and Direct do not. Site Routing has its own Polkit authorization: every
+rule/migration change requires confirmation, while automatic restoration of
+approved rules does not. It remains running when the preferences window or
+extension closes. Empty rules make no network changes. Existing manual host
+policies require an exact diff, private backup and separate migration approvals.
+
+Installation, updating, errors, migration and rollback are described in
+[docs/site-routing.md](docs/site-routing.md). The
+[acceptance record](docs/site-routing-acceptance.md) identifies outstanding real
+Fedora tests, especially disconnects, AdGuard TUN/AUTO and early boot. Do not
+treat this feature as release-accepted or absolute leak protection.
+
 ## Uninstallation
 
 Run the commands below from the repository root, in a terminal in your local
 GNOME session. Remove the components you installed using the matching procedure.
+
+### Remove Site Routing first, if installed
+
+Remove its rules in extension preferences and review any migration rollback
+before removing the helper or extension. Then:
+
+```bash
+sudo ./scripts/uninstall-site-routing.sh
+```
+
+The default procedure refuses removal if rules/protection remain and restarts
+the manager. To explicitly release **all users'** managed destinations back to
+ordinary system routing instead:
+
+```bash
+sudo ./scripts/uninstall-site-routing.sh --release-rules
+```
+
+This removes only owned routing/firewall objects and system integration; it
+does not restore previously retired manual NM entries. Use the UI rollback
+first if needed. A cleanup failure retains guards and service files and stops
+uninstallation. Follow the reported recovery instructions before continuing.
+Private state/backups at `/var/lib/adguardvpn-site-routing` are retained.
+See [the full removal procedure](docs/site-routing.md#uninstall-and-retained-data).
 
 ### Remove both the extension and passwordless helper
 
@@ -137,6 +200,8 @@ alone does not stop a running VPN session.
 
 Run this as your normal desktop user, then log out of GNOME and log back in.
 An installed passwordless helper remains installed until separately removed.
+An installed Site Routing service also remains active, including its guards;
+removing only the extension does not release those rules.
 
 ### Remove only the passwordless helper
 
@@ -155,6 +220,8 @@ gnome-extensions enable adguardvpn-toggle@chatgpt.local
 
 The extension detects the remaining user CLI when re-enabled and resumes direct
 CLI operation; connections may request administrator authorization again.
+If Site Routing is retained, assignments to protected AdGuard become
+`provider-missing` and known IPs remain blocked until reassigned or removed.
 
 ### Optional cleanup of saved settings and login data
 
@@ -176,6 +243,13 @@ configuration; reinstalling the helper will require logging in again:
 sudo rm -rf -- /var/lib/adguardvpn-gnome
 ```
 
+After successfully uninstalling Site Routing, you may also permanently delete
+its separate journal and migration backups:
+
+```bash
+sudo rm -rf -- /var/lib/adguardvpn-site-routing
+```
+
 The original AdGuard VPN CLI installation and its normal user profile remain
 installed. Uninstalling this project does not uninstall AdGuard VPN itself.
 
@@ -193,20 +267,25 @@ Run the deterministic extension tests, helper tests and archive checks:
 
 ```bash
 npm ci
-python3 -m pip install -r requirements-dev.txt
+# Use the system Python with native Gio/GLib bindings installed.
+python3 -m venv --system-site-packages .tmp/python-env
+.tmp/python-env/bin/python -m pip install -r requirements-dev.txt
 npm run test:coverage
-PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run -m unittest discover -s tests -v
-python3 -m coverage report
+PYTHONDONTWRITEBYTECODE=1 .tmp/python-env/bin/python -m coverage run -m unittest discover -s tests -v
+.tmp/python-env/bin/python -m coverage report
 for script in scripts/*.sh helper/client.sh; do bash -n "$script"; done
 ```
 
 The GitHub Actions workflow runs these checks on pushes and pull requests.
 It requires 100% line, branch and function coverage of the compiled extension,
-and 100% statement and branch coverage of the Python controller. The tests cover
+and 100% statement and branch coverage of the Python controllers and routing
+bootstrap. Native Gio/GLib bindings are required (`python3-gobject` on Fedora,
+`python3-gi` on Ubuntu). The tests cover
 parsing, preferences, navigation, connection switching, startup/status grace
 periods, cancellation, failures, privileged validation and the installed ZIP's
-complete module graph. GNOME, subprocesses and the clock are simulated; these
-checks do **not** replace real testing against GNOME, Polkit and a VPN tunnel.
+complete module graph. A separate CI job also exercises real `ip`/`nft` inside
+a disposable network namespace. UI, bus and vendor processes remain simulated;
+these checks do **not** replace actual GNOME/Polkit/VPN and Fedora boot testing.
 
 ## Publishing and security
 

@@ -20,6 +20,9 @@ def plan_rules(rules: list[dict], providers: dict) -> dict[str, Assignment]:
         provider = visible_providers(providers, rule['owner_name']).get(target.key)
         families = {ipaddress.ip_address(address).version for address in rule['addresses']}
         usable = provider is not None and bool(families) and families <= set(provider.paths)
+        if usable and provider.allowed_networks is not None:
+            usable = all(any(ipaddress.ip_address(address) in ipaddress.ip_network(network)
+                for network in provider.allowed_networks) for address in rule['addresses'])
         if any(address in conflicts for address in rule['addresses']):
             rule['status'], rule['detail'] = 'conflict', 'An IP is assigned to different targets. Affected IPs are blocked.'
         elif provider is None:

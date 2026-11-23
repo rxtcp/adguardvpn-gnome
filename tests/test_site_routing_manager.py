@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock
 
 from site_routing.manager import RoutingManager
 from site_routing.models import NetworkPath, Provider, Target
@@ -98,3 +99,71 @@ class RoutingManagerTests(unittest.TestCase):
         self.manager.handle({'operation': 'remove-rule', 'id': rule['id']}, 1000, 'fixtureuser')
         self.assertEqual(self.manager.rules(1000), [])
         self.assertEqual(self.kernel.calls[-1], ('apply', {}))
+
+    def test_emergency_guard_failure_is_not_reported_as_active(self):
+        self.add()
+        self.kernel.block = Mock(side_effect=RuntimeError('firewall rejected transaction'))
+        with self.assertRaises(RuntimeError): self.manager.emergency_block()
+        self.assertEqual(self.manager.rules(1000)[0]['status'], 'apply-error')
+        self.assertIn('not confirmed', self.manager.rules(1000)[0]['detail'])
+
+    def test_update_changes_target_only_and_rule_ownership_and_limits_are_enforced(self):
+        rule = self.add()
+        for request in ({'operation': 'add-rule', 'domain': 'one.example', 'target': TARGET},
+                        {'operation': 'update-rule', 'id': rule['id'], 'domain': 'other.example', 'target': TARGET},
+                        {'operation': 'remove-rule', 'id': '00000000-0000-4000-8000-000000000099'}):
+            with self.assertRaises(ValueError): self.manager.handle(request, 1000, 'fixtureuser')
+        result = self.manager.handle({'operation': 'update-rule', 'id': rule['id'], 'domain': rule['domain'],
+            'target': {'kind': 'direct', 'id': 'direct'}}, 1000, 'fixtureuser')
+        self.assertEqual(result['rule']['target']['kind'], 'direct')
+        self.assertEqual(result['rule']['status'], 'blocked-offline')
+        self.store.state['rules'] *= 128
+        with self.assertRaises(ValueError): self.add('two.example')
+
+    def test_provider_reads_filter_private_profiles_and_dns_refresh_is_rate_limited(self):
+        self.registry.providers.append(Provider(Target('adguard', 'adguardvpn-gnome'), 'Private fixture', users=('anotheruser',)))
+        self.assertEqual(len(self.manager.handle({'operation': 'list-providers'}, 1000, 'fixtureuser')['providers']), 2)
+        self.add()
+        self.manager.refresh(force_dns=True)
+        self.assertEqual(len(self.resolver.calls), 1)
+        self.now += 5
+        self.resolver.answers['one.example'] = ((), 5)
+        self.manager.refresh(force_dns=True)
+        self.assertEqual(self.manager.rules(1000)[0]['status'], 'dns-error')
+        self.assertEqual(self.store.state['rules'][0]['addresses'], ['198.51.100.8', '2001:db8::8'])
+        self.assertEqual(self.manager.handle({'operation': 'list-rules'}, 1000, 'fixtureuser')['rules'], self.manager.rules(1000))
+
+    def test_checkpoint_recovery_and_guard_failure_never_report_success(self):
+        def apply(assignments, journal, installation, approved, checkpoint):
+            checkpoint({**journal, 'pending_objects': [{'fixture': 'intent'}]})
+            raise RuntimeError('interrupted after intent checkpoint')
+        self.kernel.apply = apply
+        self.kernel.block = Mock(side_effect=RuntimeError('fixture guard failure'))
+        result = self.add()
+        self.assertEqual(result['status'], 'apply-error')
+        self.assertIn('not confirmed', result['detail'])
+        self.assertTrue(self.store.state['kernel']['pending_objects'])
+
+    def test_reconciliation_global_capacity_and_emergency_without_known_addresses(self):
+        self.manager.emergency_block(); self.assertEqual(self.kernel.calls, [])
+        self.add()
+        self.manager.emergency_block()
+        self.assertIn('have been blocked', self.manager.rules(1000)[0]['detail'])
+        self.store.state['kernel']['known'] = [f'2001:db8::{index:x}' for index in range(1, 4098)]
+        with self.assertRaisesRegex(ValueError, 'total tracked-address'): self.manager.refresh()
+
+    def test_migration_adapters_are_separately_invoked_and_failures_remain_visible(self):
+        rule = self.add()
+        request = {'operation': 'update-rule', 'id': rule['id'], 'domain': rule['domain'], 'target': TARGET,
+            'migration': {'id': '00000000-0000-4000-8000-000000000009', 'stage': 'protect'}}
+        with self.assertRaisesRegex(ValueError, 'adapter is unavailable'): self.manager.handle(request, 1000, 'fixtureuser')
+        migrations = Mock()
+        migrations.approved.return_value = []
+        migrations.preview.return_value = {'fixture': 'preview'}
+        self.manager.migrations = migrations
+        self.manager.handle(request, 1000, 'fixtureuser')
+        migrations.apply.assert_called_once()
+        self.assertEqual(self.manager.diagnose(rule['id'], 1000)['migration'], {'fixture': 'preview'})
+        migrations.apply.side_effect = ValueError('stale migration plan')
+        with self.assertRaisesRegex(ValueError, 'stale migration'): self.manager.handle(request, 1000, 'fixtureuser')
+        self.assertEqual(self.manager.rules(1000)[0]['status'], 'apply-error')

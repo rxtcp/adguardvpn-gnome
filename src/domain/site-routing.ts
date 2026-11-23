@@ -1,4 +1,4 @@
-import type {RoutingStatus} from './types.js';
+import type {RoutingStatus} from './site-routing-types.js';
 
 export const protectionNotice = 'Protection applies only to known IP addresses. Shared IPs affect other hosts; ' +
     'application DoH/DoT and unknown cached addresses are outside this guarantee. ' +
@@ -20,6 +20,8 @@ export function normalizeSiteDomain(value: string, toAscii: (host: string) => st
         host = parts[0]!;
     }
     host = host.replace(/\.$/, '');
+    if (/[\u200c\u200d]/.test(host))
+        throw new Error('Enter the canonical xn-- hostname for names containing joining characters.');
     if (/[/:?#@*%;\[\]]/.test(host))
         throw new Error('Use an exact hostname, not an IP address or wildcard.');
     const canonical = toAscii(host)?.toLowerCase();

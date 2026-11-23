@@ -5,6 +5,7 @@
 | Path | Responsibility |
 | --- | --- |
 | `src/extension.ts` | GNOME enable/disable and panel integration. |
+| `src/prefs.ts` | Standard, separate GNOME extension preferences entry. |
 | `src/domain/` | Typed values, CLI output parsing, location grouping/sorting and preference validation. No GNOME imports. |
 | `src/platform/` | Executable discovery, GLib preference files, bounded/cancellable Gio subprocesses and terminal fallback. |
 | `src/application/connection-controller.ts` | Connect, disconnect and switch sequencing, with direct/protected error handling. |
@@ -12,12 +13,24 @@
 | `src/application/location-selection.ts` | Saved default, country resolution and display labels. |
 | `src/application/server-catalog.ts` | Unprivileged listing and country-specific latency selection. |
 | `src/ui/` | GNOME toggle/indicator, menu header, navigation and scrollable server buttons. |
+| `src/domain/site-routing*.ts` | Typed Site Routing models, exact host parsing and validation of unknown API responses. |
+| `src/platform/routing-client.ts` | Cancellable asynchronous system D-Bus JSON client. |
+| `src/application/routing-controller.ts` | Preferences operations, confirmation and stale-response suppression. |
+| `src/ui/site-routing/` | GTK4/libadwaita page, accessible rule rows and complete migration dialogs. |
 | `extension/` | Metadata, documentation and icon copied into the build. |
 | `helper/control.py` | Existing self-contained privileged entry point, kept in Python. |
+| `site_routing/` | Independent Python policy manager: planning, DNS, discovery, owned kernel policy, persistence, migration and D-Bus authorization. |
+| `routing_system/` | Protected bootstrap, early guard/daemon units and separate bus/Polkit integration. |
 
 The helper deliberately remains a single independently installed program: its
 root ownership checks, fixed executable paths and import boundary do not gain
 new runtime dependencies as part of this UI refactoring.
+
+Site Routing deliberately has a separate installed package, state directory
+and dependency boundary. Its optional installer supplies native Gio/GLib,
+dnspython and idna through Fedora packages. The original helper remains
+self-contained. See [site-routing.md](site-routing.md) for the trust boundary,
+guard-before-allow sequence, known-IP limits and installation/removal.
 
 The TypeScript compiler uses `strict`, `noUncheckedIndexedAccess`,
 `noImplicitOverride`, unused-symbol checks and `noEmitOnError`. GNOME API types
@@ -53,8 +66,11 @@ tests run the real installer with a fake `gnome-extensions` command, inspect the
 ZIP and resolve every relative JavaScript import inside it.
 
 Shell scripts receive syntax checks and the extension install/uninstall path
-has integration tests. The privileged installer is not executed as root by the
-suite; coverage percentages describe the extension and Python controller,
+has integration tests. Site Routing removal is also exercised with an inert
+command harness: nonempty state, explicit release, retained guards on failure,
+missing installation and untrusted launcher checks. Privileged installers are
+not executed as root by the unit suite; coverage percentages describe the
+compiled extension and all Python helpers/manager/bootstrap,
 not privileged shell installation, external GNOME libraries or the vendor CLI.
 
 ```bash
@@ -62,10 +78,38 @@ npm ci
 npm run typecheck
 npm test
 npm run test:coverage
-python3 -m pip install -r requirements-dev.txt
-PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run -m unittest discover -s tests -v
-python3 -m coverage report
+# System Python must provide Gio/GLib (Fedora: python3-gobject; Ubuntu: python3-gi).
+python3 -m venv --system-site-packages .tmp/python-env
+.tmp/python-env/bin/python -m pip install -r requirements-dev.txt
+PYTHONDONTWRITEBYTECODE=1 .tmp/python-env/bin/python -m coverage run -m unittest discover -s tests -v
+.tmp/python-env/bin/python -m coverage report
 ```
+
+The native GVariant tests use real Gio/GLib types with an injected fake bus;
+they never contact the host system bus. Other Python tests inject clocks,
+resolvers, executors and kernel adapters, with real private temporary files.
+They include partial writes, pending-object recovery, missing IPv6, shared-IP
+conflicts, ambiguous discovery, Polkit refusal, shutdown races, DNS retention
+and stale migration backups. `.coveragerc` includes all three Python packages;
+new manager code must not be hidden behind helper-only coverage.
+
+The `routing-namespace` CI job additionally runs the actual Linux `ip` and `nft`
+programs with synthetic interfaces in a disposable network namespace. Its test
+entry is `tests/site_routing_namespace.py`, intentionally outside ordinary
+`test_*.py` discovery. It refuses root execution without a distinct parent
+namespace marker. To reproduce on a disposable Linux test host with `iproute2`,
+`nftables` and system `idna` installed:
+
+```bash
+parent_namespace="$(readlink /proc/self/ns/net)"
+sudo env SITE_ROUTING_PARENT_NETNS="$parent_namespace" unshare --net \
+    /usr/bin/python3 -m unittest discover -s tests -p site_routing_namespace.py -v
+```
+
+Do not invoke the test directly in the host namespace. The runtime may also
+deny namespace/netlink capabilities; use CI or an authorized disposable host
+in that case. This test needs no internet peers or proprietary VPN client.
+It does not establish the real Fedora acceptance criteria.
 
 ## Desktop smoke test
 
@@ -83,3 +127,9 @@ the existing helper installation and authentication procedure documented in
 
 Automated tests do not establish GNOME ABI compatibility, Polkit authorization,
 real CLI output on every release, or live network/tunnel behavior.
+
+For Site Routing, execute and record the full
+[Fedora acceptance matrix](site-routing-acceptance.md). In particular, verify
+boot ordering and measured traffic during disconnects with both real VPNs,
+SELinux enforcing and IPv6 enabled before release. The early systemd ordering
+and passing namespace job alone do not satisfy AC-11.

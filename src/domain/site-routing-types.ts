@@ -28,8 +28,16 @@ export interface MigrationPlan {
 export interface RoutingDiagnostics {
     rule: RoutingRule;
     addresses: string[];
+    routes: ObservedRoute[];
     protection: string;
     migration: MigrationPlan | null;
+}
+export interface ObservedRoute {
+    address: string;
+    dev?: string;
+    table?: string | number;
+    gateway?: string;
+    type?: string;
 }
 export type MigrationStage = 'protect' | 'retire' | 'rollback';
 export type RoutingMutation =

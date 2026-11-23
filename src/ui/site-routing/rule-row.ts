@@ -1,7 +1,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
-import {statusLabel} from './domain.js';
-import type {RoutingRule} from './types.js';
+import {statusLabel} from '../../domain/site-routing.js';
+import type {RoutingRule} from '../../domain/site-routing-types.js';
 
 export function createRuleRow(rule: RoutingRule, targetName: string,
     edit: () => void, remove: () => void, diagnose: () => void): Adw.ActionRow {

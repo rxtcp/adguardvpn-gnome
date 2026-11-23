@@ -1,13 +1,13 @@
 import Adw from 'gi://Adw';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
-import {errorMessage} from '../domain/cli-output.js';
-import {RoutingClient} from './client.js';
-import {RoutingController, type RoutingView} from './controller.js';
-import {normalizeSiteDomain, protectionNotice} from './domain.js';
+import {errorMessage} from '../../domain/cli-output.js';
+import {RoutingClient} from '../../platform/routing-client.js';
+import {RoutingController, type RoutingView} from '../../application/routing-controller.js';
+import {normalizeSiteDomain, protectionNotice} from '../../domain/site-routing.js';
 import {confirm, showDiagnostics} from './dialogs.js';
 import {createRuleRow} from './rule-row.js';
-import type {RoutingDiagnostics, RoutingRule, VpnProvider} from './types.js';
+import type {RoutingDiagnostics, RoutingRule, VpnProvider} from '../../domain/site-routing-types.js';
 
 function key(provider: VpnProvider): string { return `${provider.target.kind}:${provider.target.id}`; }
 

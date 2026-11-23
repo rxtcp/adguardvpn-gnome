@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 from site_routing.authorization import PolkitAuthorizer
 from site_routing.rpc import RequestDispatcher
@@ -55,3 +56,27 @@ class RoutingRpcTests(unittest.TestCase):
             def handle(self, *args): raise AssertionError('must not mutate')
         response = json.loads(RequestDispatcher(Manager(), Authorizer()).dispatch(':1.2', '{"operation":"list-rules"}'))
         self.assertEqual(response['error']['code'], 'not-authorized')
+
+    def test_auth_result_account_lookup_and_caller_uid_are_verified(self):
+        uid, authorized = 1000, True
+        def call(*args, **kwargs): return (uid,) if args[3] == 'GetConnectionUnixUser' else ((authorized, False, {}),)
+        bus = SimpleNamespace(call=call, glib=SimpleNamespace(Variant=lambda *args: args))
+        authorizer = PolkitAuthorizer(bus, account=Mock(side_effect=KeyError('account deleted')))
+        with self.assertRaisesRegex(PermissionError, 'no longer available'): authorizer.identity(':1.42', 'list-rules')
+        for uid, authorized in [(1000, False), (1000, 1), (True, True), (-1, True), (4294967296, True)]:
+            with self.subTest(uid=uid, authorized=authorized), self.assertRaisesRegex(PermissionError, 'not granted'):
+                authorizer.identity(':1.42', 'list-rules')
+
+    def test_expected_and_unexpected_service_errors_do_not_return_private_command_details(self):
+        authorizer = SimpleNamespace(identity=lambda *args: (1000, 'fixtureuser'))
+        manager = Mock()
+        dispatcher = RequestDispatcher(manager, authorizer)
+        for error, code in ((ValueError('invalid state'), 'invalid-operation'),
+                            (OSError('private subprocess details'), 'apply-error'),
+                            (RuntimeError('private subprocess details'), 'apply-error'),
+                            (KeyError('private bug details'), 'internal-error')):
+            manager.handle.side_effect = error
+            response = json.loads(dispatcher.dispatch(':1.42', '{"operation":"list-rules"}'))
+            self.assertEqual(response['error']['code'], code)
+            self.assertNotIn('private', response['error']['message'])
+        manager.emergency_block.assert_called_once()

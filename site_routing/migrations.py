@@ -1,7 +1,9 @@
 """Reviewed diff, private backup, separate protect/retire confirmations and rollback."""
 import uuid
+import json
 
 from .migration_fields import settings_hash, settings_removals
+from .migration_matching import matches_profile
 
 
 def public_plan(plan: dict) -> dict:
@@ -16,25 +18,25 @@ class MigrationManager:
         existing = [plan for plan in state['migrations'].values() if plan['rule_id'] == rule['id'] and plan['stage'] not in ('preview', 'rolled-back')]
         if existing:
             return public_plan(existing[-1])
-        profiles, changes = [], []
-        for profile in self.reader.profiles():
+        profiles, changes, candidates = [], [], []
+        for profile in self.reader.migration_profiles():
             if profile['users'] and rule['owner_name'] not in profile['users']:
                 continue
             patches = settings_removals(profile['settings'], rule['addresses'])
             if not patches:
                 continue
+            candidates.append(profile)
             after, after_settings = self.reader.render_without(profile['serialized'], patches)
             profiles.append({'uuid': profile['uuid'], 'before': profile['serialized'], 'after': after,
                              'addresses': sorted({address for patch in patches for address in patch['addresses']}),
                              'before_hash': settings_hash(profile['settings']), 'after_hash': settings_hash(after_settings)})
-            changes += [f'{profile["name"]} ({profile["uuid"]}): remove {patch["setting"]}.{patch["field"]} host {address}'
-                        for patch in patches for address in patch['addresses']]
+            changes += [f'{profile["name"]} ({profile["uuid"]}): remove {patch["setting"]}.{patch["field"]}[{index}] '
+                        + json.dumps(profile['settings'][patch['setting']][patch['field']][index], sort_keys=True, default=list)
+                        for patch in patches for index in patch['indices']]
         overlaps = self.kernel.overlaps(rule['addresses'], state['kernel'])
         if not profiles:
             return None
-        represented = {address for backup in profiles for address in backup['addresses']}
-        import ipaddress
-        if any(str(ipaddress.ip_network(item['data'].get('dst', item['data'].get('to')), strict=False).network_address) not in represented for item in overlaps):
+        if any(not any(matches_profile(item, profile) for profile in candidates) for item in overlaps):
             raise ValueError('Some overlapping policies cannot be matched exactly to NM settings; no automatic deletion is allowed.')
         identity = str(uuid.uuid4())
         state['migrations'] = {key: plan for key, plan in state['migrations'].items() if plan['rule_id'] != rule['id'] or plan['stage'] != 'preview'}
@@ -55,7 +57,7 @@ class MigrationManager:
 
     def apply(self, state: dict, rule: dict, request: dict) -> None:
         plan = state['migrations'].get(request['id'])
-        if not plan or plan['rule_id'] != rule['id'] or plan['owner_uid'] != rule['owner_uid'] or plan['target'] != rule['target']:
+        if not plan or plan['rule_id'] != rule['id'] or plan['owner_uid'] != rule['owner_uid'] or (request['stage'] != 'rollback' and plan['target'] != rule['target']):
             raise ValueError('This migration plan is stale or belongs to another rule.')
         stage, profiles = request['stage'], self._profiles(plan)
         if stage == 'protect':

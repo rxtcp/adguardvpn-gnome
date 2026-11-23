@@ -34,6 +34,19 @@ class RoutingLifecycleTests(unittest.TestCase):
         self.assertEqual(kernel.calls, [('block', {'198.51.100.8'}), ('apply', {})])
         self.assertTrue(check_empty(store))
 
+    def test_empty_and_unresolved_configuration_release_does_not_invent_addresses(self):
+        store = MemoryStore(); kernel = Kernel(store)
+        release_all(store, kernel); self.assertEqual(kernel.calls, [])
+        store.state['rules'] = [{'addresses': []}]
+        restore_guard(store, kernel); self.assertEqual(kernel.calls, [])
+        original = kernel.apply
+        def apply(assignments, journal, installation, checkpoint):
+            checkpoint({**journal, 'pending_objects': []})
+            return original(assignments, journal, installation)
+        kernel.apply = apply
+        release_all(store, kernel)
+        self.assertTrue(check_empty(store)); self.assertEqual(kernel.calls, [('apply', {})])
+
     def test_worker_serializes_refresh_and_no_new_work_starts_after_close(self):
         class Manager:
             def __init__(self): self.calls = []

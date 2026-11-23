@@ -45,10 +45,14 @@ def normalize_addresses(values: object) -> tuple[str, ...]:
     result = []
     for value in values:
         try:
+            if not isinstance(value, str):
+                raise ValueError('An address string is required.')
             address = ipaddress.ip_address(value)
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+                address = address.ipv4_mapped
         except (ValueError, TypeError) as error:
             raise ValueError('DNS returned an invalid address.') from error
-        if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified or str(address) == '255.255.255.255':
+        if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved:
             raise ValueError('Only unicast, non-localhost destination addresses are supported.')
         canonical = str(address)
         if canonical not in result:

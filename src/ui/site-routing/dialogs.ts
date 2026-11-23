@@ -1,6 +1,6 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
-import type {MigrationPlan, MigrationStage, RoutingDiagnostics} from './types.js';
+import type {MigrationPlan, MigrationStage, RoutingDiagnostics} from '../../domain/site-routing-types.js';
 
 function details(text: string): Gtk.ScrolledWindow {
     const buffer = new Gtk.TextBuffer();
@@ -32,6 +32,7 @@ export function showDiagnostics(window: Adw.PreferencesWindow, diagnosis: Routin
     migrate: (plan: MigrationPlan, stage: MigrationStage) => void): void {
     const plan = diagnosis.migration;
     const text = [diagnosis.protection, `Known addresses:\n${diagnosis.addresses.join('\n')}`,
+        `Observed kernel routes:\n${diagnosis.routes.map(route => JSON.stringify(route)).join('\n')}`,
         plan ? `Exact migration diff (${plan.stage}):\n${plan.changes.join('\n')}` : 'No eligible legacy NM entries were found.'].join('\n\n');
     const dialog = new Adw.MessageDialog({transient_for: window, modal: true,
         heading: diagnosis.rule.domain, body: diagnosis.rule.detail, body_use_markup: false,

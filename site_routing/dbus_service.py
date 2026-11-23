@@ -20,7 +20,12 @@ class DbusService:
         if not self.slots.acquire(blocking=False):
             self._reply(invocation, envelope(code='busy', message='Site Routing is busy. Try again shortly.'))
             return
-        future = self.executor.submit(self.dispatcher.dispatch, invocation.get_sender(), contents)
+        try:
+            future = self.executor.submit(self.dispatcher.dispatch, invocation.get_sender(), contents)
+        except RuntimeError:
+            self.slots.release()
+            self._reply(invocation, envelope(code='busy', message='Site Routing is stopping. Try again shortly.'))
+            return
         def completed(result):
             self.slots.release()
             try:

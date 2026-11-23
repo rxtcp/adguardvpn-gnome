@@ -21,6 +21,21 @@ if [[ ! -f $protected_dir/launch.py ]]; then
     exit 0
 fi
 
+# Verify the launcher before asking Python to execute any installed code.
+/usr/bin/python3 -I -B - <<'PY'
+from pathlib import Path
+import stat
+launcher = Path('/usr/libexec/adguardvpn-site-routing/launch.py')
+for current in (*reversed(launcher.parents), launcher):
+    if current == Path('/'):
+        continue
+    metadata = current.lstat()
+    if metadata.st_uid != 0 or metadata.st_mode & 0o022 or stat.S_ISLNK(metadata.st_mode):
+        raise SystemExit('Refusing an untrusted Site Routing launcher or ancestor.')
+if not launcher.is_file():
+    raise SystemExit('Refusing an invalid Site Routing launcher.')
+PY
+
 /usr/bin/systemctl stop adguardvpn-site-routing.service
 if [[ $# -eq 1 ]]; then
     printf 'Explicitly releasing all Site Routing rules. Their addresses return to ordinary system routing.\n'
