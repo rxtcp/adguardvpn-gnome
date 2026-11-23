@@ -25,6 +25,9 @@ Rules operate on the A/AAAA addresses resolved by the controller. They affect
 traffic to those IPs from the whole machine, including other applications and
 users. A shared IP can affect unrelated hostnames. Assigning the same IP to
 different targets blocks that IP and reports a conflict.
+The same IP also stays blocked when another rule requires it to be blocked,
+for example because that rule's IPv6 path is missing. A dependent hostname is
+reported as a shared-IP conflict, never as `active` while the IP is denied.
 
 This is not absolute domain isolation. Application DoH/DoT, unknown cached
 answers and new DNS addresses before synchronization are outside the guarantee.

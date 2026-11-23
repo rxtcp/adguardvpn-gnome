@@ -42,6 +42,10 @@ def plan_rules(rules: list[dict], providers: dict) -> dict[str, Assignment]:
             if previous is not None and previous.path is None:
                 path = None
             assignments[address] = Assignment(target.key, path)
+    for rule in rules:
+        if rule['status'] == 'active' and any(assignments[address].path is None for address in rule['addresses']):
+            rule['status'] = 'conflict'
+            rule['detail'] = 'A shared IP is blocked by another rule. Review its target access and required address families.'
     return assignments
 
 

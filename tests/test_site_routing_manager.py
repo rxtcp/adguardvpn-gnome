@@ -74,6 +74,14 @@ class RoutingManagerTests(unittest.TestCase):
         self.assertEqual(self.add()['status'], 'blocked-offline')
         self.assertTrue(all(item.path is None for item in self.kernel.calls[-1][1].values()))
 
+    def test_another_hostname_cannot_report_active_for_an_ip_held_blocked_by_a_shared_rule(self):
+        self.registry.providers[0] = Provider(Target.parse(TARGET), 'IPv4-only VPN', {4: PATH4})
+        self.add()
+        second = self.add('two.example')
+        self.assertIsNone(self.kernel.calls[-1][1]['198.51.100.8'].path)
+        self.assertEqual(second['status'], 'conflict')
+        self.assertIn('shared IP', second['detail'])
+
     def test_provider_uuid_and_owner_are_validated_before_dns_or_kernel_mutation(self):
         for request in ({'operation': 'add-rule', 'domain': 'one.example', 'target': {'kind': 'networkmanager', 'id': '00000000-0000-4000-8000-000000000099'}},
                         {'operation': 'add-rule', 'domain': '*.example', 'target': TARGET}):
