@@ -186,6 +186,9 @@ recorded in [docs/behavior-contract.md](docs/behavior-contract.md) and tested
 before the refactoring. See [docs/development.md](docs/development.md) for the
 module layout, test boundaries and GNOME smoke-test procedure.
 
+AI agents contributing to this repository must follow the instructions in
+[AGENTS.md](AGENTS.md).
+
 Run the deterministic extension tests, helper tests and archive checks:
 
 ```bash
