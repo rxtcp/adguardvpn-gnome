@@ -37,6 +37,8 @@ class MigrationTests(unittest.TestCase):
             def overlaps(self, addresses, journal): return [{'kind': 'rule', 'family': 4,
                 'data': {'priority': 900, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}}]
             def block(self, addresses, installation): self.events.append('block')
+            def protect_subset(self, addresses, journal, installation): self.events.append('block')
+            def verify_replacement(self, addresses, journal): return True
             def change_legacy(self, entries, action): self.events.append(action)
         self.kernel, self.reader = Kernel(), Reader()
         self.manager = MigrationManager(self.store, self.reader, self.kernel)
@@ -72,6 +74,29 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
         self.assertEqual(self.kernel.events, [])
+
+    def test_retirement_rechecks_the_kernel_even_if_the_previous_public_status_was_active(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        original = copy.deepcopy(self.profile['settings'])
+        self.kernel.verify_replacement = Mock(return_value=False)
+        with self.assertRaisesRegex(ValueError, 'verified'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.assertEqual(self.profile['settings'], original)
+        self.assertEqual(self.manager.preview(self.state, self.rule)['stage'], 'protected')
+        self.assertIn('verified', self.manager.preview(self.state, self.rule)['detail'])
+        self.assertEqual(self.kernel.events, [])
+
+    def test_tunnel_loss_during_retirement_records_failure_and_keeps_rollback_available(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        self.kernel.verify_replacement = Mock(side_effect=[True, False])
+        with self.assertRaisesRegex(ValueError, 'disappeared during legacy removal'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.assertEqual(self.manager.preview(self.state, self.rule)['stage'], 'failed')
+        self.assertIn('disappeared', self.manager.preview(self.state, self.rule)['detail'])
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
+        self.assertEqual(self.state['rules'], [])
 
     def test_only_exact_host_entries_are_eligible(self):
         patches = settings_removals(self.profile['settings'], ['198.51.100.8'])
@@ -124,7 +149,7 @@ class MigrationTests(unittest.TestCase):
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
         self.rule['status'] = 'blocked-offline'
         self.kernel.verify_replacement = Mock(return_value=False)
-        with self.assertRaisesRegex(ValueError, 'active protected replacement'):
+        with self.assertRaisesRegex(ValueError, 'not verified'):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         self.kernel.verify_replacement.return_value = True
         self.profile['settings']['connection']['id'] = 'User changed after protect'

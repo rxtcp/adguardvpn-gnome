@@ -39,14 +39,14 @@ class KernelFixture:
         def value(key, default=None):
             return fields[fields.index(key) + 1] if key in fields else default
         if category == 'rule':
-            row = {'priority': int(value('priority')), 'dst': value('to'), 'protocol': '196'}
+            row = {'priority': int(value('priority')), 'dst': value('to'), 'protocol': value('protocol', '196')}
             if 'unreachable' in fields:
                 row['action'] = 'unreachable'
             else:
                 row['table'] = int(value('table'))
         else:
             prefix = next(field for field in fields if '/' in str(field))
-            row = {'dst': prefix, 'table': int(value('table')), 'protocol': '196',
+            row = {'dst': prefix, 'table': int(value('table')), 'protocol': value('proto', '196'),
                    'dev': value('dev'), 'prefsrc': value('src')}
             if value('via'):
                 row['gateway'] = value('via')
@@ -118,19 +118,20 @@ class RoutingKernelTests(unittest.TestCase):
         runner = KernelFixture()
         foreign = {'priority': 999, 'dst': '198.51.100.8/32', 'table': 777}
         runner.current[4]['rule'].append(foreign)
-        with self.assertRaises(RuntimeError) as error:
-            KernelBackend(runner).apply({'198.51.100.8': Assignment('vpn', PATH4)},
-                {'objects': [], 'known': ['198.51.100.8'], 'tables': {}, 'priority': 0}, INSTALLATION)
-        self.assertTrue(error.exception.conflict)
+        result = KernelBackend(runner).apply({'198.51.100.8': Assignment('vpn', PATH4)},
+            {'objects': [], 'known': ['198.51.100.8'], 'tables': {}, 'priority': 0}, INSTALLATION)
+        self.assertEqual(result['failures']['198.51.100.8']['status'], 'conflict')
         self.assertIn(foreign, runner.current[4]['rule'])
-        self.assertEqual([event for event in runner.events if event[0] == 'ip'], [])
+        self.assertEqual(runner.current[4]['route'], [])
+        self.assertTrue(all('unreachable' in event[2] for event in runner.events if event[0] == 'ip'))
 
     def test_route_mismatch_is_never_allowed_by_firewall(self):
         runner = KernelFixture()
         runner.route_error = True
-        with self.assertRaises(RuntimeError):
-            KernelBackend(runner).apply({'198.51.100.8': Assignment('vpn', PATH4)},
-                {'objects': [], 'known': ['198.51.100.8'], 'tables': {}, 'priority': 0}, INSTALLATION)
+        result = KernelBackend(runner).apply({'198.51.100.8': Assignment('vpn', PATH4)},
+            {'objects': [], 'known': ['198.51.100.8'], 'tables': {}, 'priority': 0}, INSTALLATION)
+        self.assertEqual(result['failures']['198.51.100.8']['status'], 'apply-error')
+        self.assertTrue(result['pending_objects'])
         self.assertEqual(len([event for event in runner.events if event[0] == 'nft']), 1)
 
     def test_ownership_journal_rejects_arbitrary_arguments(self):

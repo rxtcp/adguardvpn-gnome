@@ -24,11 +24,14 @@ export interface MigrationPlan {
     id: string;
     stage: string;
     changes: string[];
+    detail: string;
 }
 export interface RoutingDiagnostics {
     rule: RoutingRule;
     addresses: string[];
     routes: ObservedRoute[];
+    checked_at: number | null;
+    provider: VpnProvider | null;
     protection: string;
     migration: MigrationPlan | null;
 }

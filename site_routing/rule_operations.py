@@ -15,6 +15,21 @@ def owned_rule(state: dict, identity: str, uid: int) -> dict:
     raise ValueError('Rule not found.')
 
 
+def restore_failed_removal(state: dict, removed: dict) -> str | None:
+    remaining = {address for rule in state['rules'] for address in rule['addresses']}
+    retained = (set(removed['addresses']) - remaining) & set(state['kernel']['known'])
+    if not retained:
+        return None
+    failures = state['kernel'].get('failures', {})
+    reasons = [failures[address]['detail'] for address in sorted(retained) if address in failures]
+    detail = ('Rule removal did not complete; the previous assignment and protection were retained. '
+              + (' '.join(dict.fromkeys(reasons)) or state['kernel'].get('global_error', 'Kernel cleanup is not confirmed.')))[:4096]
+    removed['status'], removed['detail'] = 'apply-error', detail
+    state['rules'].append(removed)
+    state['revision'] += 1
+    return detail
+
+
 def change_rule(state: dict, request: dict, providers: dict, uid: int, username: str, now: float) -> dict | None:
     operation = request['operation']
     if operation == 'remove-rule':

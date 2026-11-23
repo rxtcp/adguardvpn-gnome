@@ -43,6 +43,7 @@ test('check displays known addresses and the exact migration diff without execut
     const {app, window} = await preferences([rule]);
     app.dbusResponses.push({data: {rule, addresses: ['198.51.100.8'], protection: 'Known IPs only',
         routes: [{address: '198.51.100.8', dev: 'fixturevpn', table: 40000, gateway: '192.0.2.1', type: 'unicast'}],
+        checked_at: 1000, provider: {...provider, active: true},
         migration: {id: '00000000-0000-4000-8000-000000000009', stage: 'preview', changes: ['Fixture VPN: remove exact 198.51.100.8/32']}}},
         {data: {providers: [provider]}}, {data: {rules: [rule]}});
     await app.press('Check rule for one.example');
@@ -57,6 +58,25 @@ test('check displays known addresses and the exact migration diff without execut
 test('Quick Settings opens the standard preferences process', async () => {
     const app = await createEnvironment(); await app.start();
     await app.press('Site Routing…'); assert.equal(app.preferencesOpened, 1); app.stop();
+});
+
+test('Check shows a synchronized provider snapshot and the reason legacy retirement was refused', async () => {
+    const nmTarget = {kind: 'networkmanager', id: '00000000-0000-4000-8000-000000000001'};
+    const nmRule = {...rule, target: nmTarget};
+    const nmProvider = {...provider, target: nmTarget, name: 'Fixture VPN',
+        detail: 'NetworkManager reports activated, but no verified kernel tunnel/IP configuration is available.'};
+    const {app, window} = await preferences([nmRule]);
+    app.dbusResponses.push({data: {rule: nmRule, addresses: ['198.51.100.8'], routes: [], checked_at: 1000,
+        provider: nmProvider, protection: 'Known IPs; VPN control-plane routing must be verified separately.',
+        migration: {id: rule.id, stage: 'protected', changes: ['exact fixture route'],
+            detail: 'Replacement is not verified for every known IP. Restore the target tunnel and retry.'}}},
+        {data: {providers: [nmProvider]}}, {data: {rules: [nmRule]}});
+    await app.press('Check rule for one.example');
+    assert.ok(app.actors.some(actor => actor.text?.includes?.('Checked at:')));
+    assert.ok(app.actors.some(actor => actor.text?.includes?.('activated, but no verified kernel tunnel')));
+    assert.ok(app.actors.some(actor => actor.text?.includes?.('Replacement is not verified')));
+    assert.equal(app.dbusCalls.filter(call => call.request.operation === 'update-rule').length, 0);
+    window.emit('close-request');
 });
 
 test('editing preserves the host and stable provider selection through rename and removal', async () => {

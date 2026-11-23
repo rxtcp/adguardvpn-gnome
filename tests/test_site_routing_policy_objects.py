@@ -114,6 +114,7 @@ class PolicyOwnershipTests(unittest.TestCase):
         self.assertEqual(backend.diagnostics(['198.51.100.8']), [{'address': '198.51.100.8'}])
         runner.read_ip = Mock(side_effect=RuntimeError('not reachable'))
         self.assertEqual(backend.diagnostics(['198.51.100.8'])[0]['type'], 'unreachable-or-unavailable')
+        self.assertFalse(backend.verify_replacement(['198.51.100.8'], manifest))
 
     def test_reviewed_legacy_changes_are_exact_idempotent_and_keep_unrelated_rows(self):
         runner = KernelFixture(); backend = KernelBackend(runner)

@@ -6,7 +6,10 @@ import time
 from .dns_refresh import refresh_answers
 from .planning import plan_rules, public_rule, visible_providers
 from .protocol import validate_request
-from .rule_operations import change_rule, owned_rule
+from .rule_operations import change_rule, owned_rule, restore_failed_removal
+from .models import Target
+from .reconciliation_log import TransitionLog
+from .reconciliation_status import apply_destination_failures, append_migration_details
 
 
 class RoutingManager:
@@ -14,6 +17,10 @@ class RoutingManager:
         self.store, self.registry, self.resolver, self.kernel = store, registry, resolver, kernel
         self.clock, self.migrations = clock, migrations
         self._state = store.load()
+        for rule in self._state['rules']:
+            rule['status'], rule['detail'] = 'resolving', 'Restoring protection; provider and kernel routes have not yet been verified.'
+        self._providers = {}
+        self._transitions = TransitionLog()
         self._mutex = threading.RLock()
 
     def rules(self, uid: int) -> list[dict]:
@@ -30,6 +37,7 @@ class RoutingManager:
             return self.diagnose(request['id'], uid)
         with self._mutex, self.store.lock():
             state = self.store.load()
+            removed = copy.deepcopy(owned_rule(state, request['id'], uid)) if operation == 'remove-rule' else None
             providers = self.registry.discover()
             rule = change_rule(state, request, providers, uid, username, self.clock())
             if 'migration' in request:
@@ -37,9 +45,9 @@ class RoutingManager:
                     raise ValueError('Migration adapter is unavailable.')
                 try:
                     self.migrations.apply(state, rule, request['migration'])
-                except (OSError, RuntimeError, ValueError):
-                    for affected in state['rules']:
-                        affected['status'], affected['detail'] = 'apply-error', 'Migration did not complete; review the retained backup and guards.'
+                except (OSError, RuntimeError, ValueError) as error:
+                    rule['status'] = 'apply-error'
+                    rule['detail'] = f'Migration {request["migration"]["stage"]} did not complete: {error}'[:4096]
                     self.store.save(state)
                     self._publish(state)
                     raise
@@ -47,17 +55,26 @@ class RoutingManager:
             self.store.save(state)
             self._state = copy.deepcopy(state)
             self.refresh(force_dns=True)
+            if removed is not None:
+                state = self.store.load()
+                failure = restore_failed_removal(state, removed)
+                if failure:
+                    self.store.save(state)
+                    self._publish(state)
+                    raise ValueError(failure)
             return {'rules': self.rules(uid)} if rule is None or rule not in state['rules'] else {'rule': public_rule(owned_rule(self._state, rule['id'], uid))}
 
-    def refresh(self, force_dns: bool = False) -> None:
+    def refresh(self, force_dns: bool = False, resolve_dns: bool = True) -> None:
         with self._mutex, self.store.lock():
             state = self.store.load()
             if not state['rules'] and not state['kernel']['known'] and not state['kernel']['objects']:
-                self._state = state
+                self._publish(state)
                 return
             providers = self.registry.discover()
-            refresh_answers(state['rules'], providers, self.resolver, self.clock(), force_dns,
-                            lambda: self._publish(state))
+            self._providers = providers
+            if resolve_dns:
+                refresh_answers(state['rules'], providers, self.resolver, self.clock(), force_dns,
+                                lambda: self._publish(state))
             assignments = plan_rules(state['rules'], providers)
             known = sorted(set(state['kernel']['known']) | set(assignments))
             if len(known) > 4096:
@@ -68,6 +85,7 @@ class RoutingManager:
                 approved = self.migrations.approved(state) if self.migrations else ()
                 state['kernel'] = self.kernel.apply(assignments, state['kernel'], state['installation_id'], approved,
                     checkpoint=lambda journal: self._checkpoint(state, journal))
+                apply_destination_failures(state)
             except (OSError, RuntimeError, ValueError) as error:
                 detail = str(error)
                 try:
@@ -77,11 +95,14 @@ class RoutingManager:
                 for rule in state['rules']:
                     rule['status'] = 'conflict' if getattr(error, 'conflict', False) else 'apply-error'
                     rule['detail'] = detail
+                state['kernel']['global_error'] = detail
+            append_migration_details(state)
             self.store.save(state)
             self._publish(state)
 
     def _publish(self, state: dict) -> None:
         self._state = copy.deepcopy(state)
+        self._transitions.publish(state)
 
     def _checkpoint(self, state: dict, journal: dict) -> None:
         state['kernel'] = journal
@@ -106,10 +127,21 @@ class RoutingManager:
     def diagnose(self, identity: str, uid: int) -> dict:
         with self._mutex, self.store.lock():
             state = self.store.load()
+            owned_rule(state, identity, uid)
+            self.refresh(resolve_dns=False)
+            state = self.store.load()
             rule = owned_rule(state, identity, uid)
-            migration = self.migrations.preview(state, rule) if self.migrations else None
+            provider = visible_providers(self._providers, rule['owner_name']).get(Target.parse(rule['target']).key)
+            public = public_rule(rule)
+            try:
+                migration = self.migrations.preview(state, rule) if self.migrations else None
+            except (OSError, RuntimeError, ValueError) as error:
+                migration = None
+                public['detail'] = f'{public["detail"]} Migration preview unavailable: {error}'[:4096]
             self.store.save(state)
-            return {'rule': public_rule(rule), 'addresses': list(rule['addresses']),
+            return {'rule': public, 'addresses': list(rule['addresses']),
+                    'checked_at': self.clock(), 'provider': provider.public() if provider else None,
                     'routes': self.kernel.diagnostics(rule['addresses']),
-                    'protection': 'Known IP addresses only; unknown cached answers and application DoH/DoT are outside the guarantee.',
+                    'protection': 'Known IP addresses only; unknown cached answers and application DoH/DoT are outside the guarantee. '
+                                  'VPN server/control-plane routing is a separate prerequisite and is not managed by site rules.',
                     'migration': migration}

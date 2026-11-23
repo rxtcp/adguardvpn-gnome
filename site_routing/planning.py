@@ -32,7 +32,8 @@ def plan_rules(rules: list[dict], providers: dict) -> dict[str, Assignment]:
         elif rule.get('dns_error'):
             rule['status'], rule['detail'] = 'dns-error', rule['dns_error']
         elif not usable:
-            rule['status'], rule['detail'] = 'blocked-offline', 'No verified path for every address family; known IPs stay blocked.'
+            reason = provider.detail if not provider.paths else 'No verified path for every required address family or WireGuard peer AllowedIPs.'
+            rule['status'], rule['detail'] = 'blocked-offline', (reason or 'Target connection is unavailable.') + ' Known IPs stay blocked.'
         else:
             rule['status'], rule['detail'] = 'active', 'Verified route for every known address.'
         for address in rule['addresses']:

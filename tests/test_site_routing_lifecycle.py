@@ -47,6 +47,14 @@ class RoutingLifecycleTests(unittest.TestCase):
         release_all(store, kernel)
         self.assertTrue(check_empty(store)); self.assertEqual(kernel.calls, [('apply', {})])
 
+    def test_partial_release_failure_is_explicit_and_retained_protection_prevents_uninstall(self):
+        store = MemoryStore(); kernel = Kernel(store)
+        store.state['kernel']['known'] = ['198.51.100.8']
+        kernel.apply = lambda *args, **kwargs: {**store.state['kernel'], 'failures': {
+            '198.51.100.8': {'status': 'apply-error', 'detail': 'kernel cleanup failed'}}}
+        with self.assertRaisesRegex(RuntimeError, 'could not be released'): release_all(store, kernel)
+        self.assertFalse(check_empty(store))
+
     def test_worker_serializes_refresh_and_no_new_work_starts_after_close(self):
         class Manager:
             def __init__(self): self.calls = []

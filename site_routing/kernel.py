@@ -1,7 +1,9 @@
 """Guard-first policy routing with terminal unreachable rules and owned cleanup."""
 from .firewall import Firewall
-from .kernel_objects import OwnedObject, choose_priority, choose_tables, table_number
-from .policy_inspection import PolicyConflict, foreign_overlaps, signature
+from .kernel_objects import OwnedObject, table_number
+from .kernel_plan import prepare_policy
+from .kernel_changes import apply_objects
+from .policy_inspection import foreign_overlaps
 from .legacy_objects import legacy_arguments
 
 
@@ -18,61 +20,41 @@ class KernelBackend:
     def block(self, addresses, installation_id: str) -> None:
         self.firewall.apply(addresses, {}, installation_id)
 
+    def protect_subset(self, addresses, journal: dict, installation_id: str) -> None:
+        blocked = set(addresses)
+        allowed = {item.address: item.path.ifindex for row in journal['objects']
+                   if (item := OwnedObject.parse(row)).kind == 'route'
+                   and item.address not in blocked and self._confirmed(item)}
+        self.firewall.apply(set(journal['known']) | blocked, allowed, installation_id)
+
     def apply(self, assignments: dict, journal: dict, installation_id: str, approved=(), checkpoint=None) -> dict:
         known = sorted(set(journal['known']) | set(assignments))
         snapshots = self.snapshot()
         previous = list(dict.fromkeys(OwnedObject.parse(row) for row in [*journal['objects'], *journal.get('pending_objects', [])]))
         try:
-            approved_ids = {signature(item['kind'], item['family'], item['data']) for item in approved}
-            overlaps = foreign_overlaps(snapshots, previous, assignments)
-            if any(signature(item['kind'], item['family'], item['data']) not in approved_ids for item in overlaps):
-                raise PolicyConflict('Existing destination policies overlap. Review the migration diff before changing them.')
-            foreign_rules = [row for family, data in snapshots.items() for row in data['rule']
-                             if not any(item.family == family and item.kind != 'route' and item.matches(row) for item in previous)]
-            routes = [row for data in snapshots.values() for row in data['route']]
-            tables = choose_tables({item.target_key for item in assignments.values() if item.path}, journal['tables'], routes, foreign_rules)
-            for family, data in snapshots.items():
-                if any(table_number(row.get('table', 254)) in journal['tables'].values() and not any(
-                        item.family == family and item.kind == 'route' and item.matches(row) for item in previous) for row in data['route']):
-                    raise PolicyConflict('An owned table contains a foreign route; it was not modified.')
-            priority = choose_priority(foreign_rules) if assignments else 0
+            plan = prepare_policy(assignments, journal, snapshots, previous, approved)
         except (ValueError, RuntimeError):
             self.block(known, installation_id)
             raise
-        desired = []
-        for address, assignment in sorted(assignments.items()):
-            desired.append(OwnedObject('block', address, priority + 1))
-            if assignment.path:
-                table = tables[assignment.target_key]
-                desired += [OwnedObject('route', address, table=table, path=assignment.path),
-                            OwnedObject('lookup', address, priority, table)]
+        desired = plan.objects
         stable = {}
         for item in desired:
-            if item.kind == 'route' and item in previous and self._present(item, snapshots) and self._verified(item):
+            if item.kind == 'route' and item in previous and self._present(item, snapshots) and self._confirmed(item):
                 stable[item.address] = item.path.ifindex
         self.firewall.apply(known, stable, installation_id)
-        pending = {**journal, 'known': known, 'tables': tables, 'priority': priority,
+        pending = {**journal, 'known': known, 'tables': {**journal['tables'], **plan.tables}, 'priority': plan.priority,
                    'pending_objects': [item.json() for item in dict.fromkeys([*previous, *desired])]}
         if checkpoint:
             checkpoint(pending)
-        for item in desired:
-            if item.kind == 'block' and not self._present(item, snapshots):
-                self.runner.write_ip(item.family, *item.arguments('add'))
-        for item in previous:
-            if item not in desired and self._present(item, snapshots):
-                self.runner.write_ip(item.family, *item.arguments('del'))
-        for item in desired:
-            if item.kind != 'block' and not self._present(item, snapshots):
-                self.runner.write_ip(item.family, *item.arguments('add'))
-        allowed = {}
-        for item in desired:
-            if item.kind == 'route':
-                if not self._verified(item):
-                    raise RuntimeError('Kernel route verification failed; protection remains blocked.')
-                allowed[item.address] = item.path.ifindex
-        self.firewall.apply(assignments, allowed, installation_id)
-        return {'objects': [item.json() for item in desired], 'pending_objects': [],
-                'known': sorted(assignments), 'tables': tables, 'priority': priority}
+        changes = apply_objects(self.runner, previous, desired, snapshots, self._present, self._verified, set(stable))
+        protected = set(assignments) | set(changes.failures)
+        self.firewall.apply(protected, changes.allowed, installation_id)
+        retained = {item.table for item in changes.pending if item.kind != 'block'}
+        tables = {key: value for key, value in journal['tables'].items() if value in retained} | plan.tables
+        return {'objects': [item.json() for item in changes.objects],
+                'pending_objects': [item.json() for item in changes.pending],
+                'known': sorted(protected), 'tables': tables, 'priority': plan.priority,
+                'failures': plan.failures | changes.failures}
 
     @staticmethod
     def _present(item: OwnedObject, snapshots: dict) -> bool:
@@ -87,6 +69,12 @@ class KernelBackend:
             return False
         routes = self.runner.read_ip(item.family, 'route', 'get', item.address)
         return bool(routes) and routes[0].get('dev') == path.interface and table_number(routes[0].get('table', 254)) == item.table and routes[0].get('gateway', '') == path.gateway
+
+    def _confirmed(self, item: OwnedObject) -> bool:
+        try:
+            return self._verified(item)
+        except (OSError, RuntimeError, ValueError):
+            return False
 
     def diagnostics(self, addresses) -> list[dict]:
         result = []
@@ -108,7 +96,7 @@ class KernelBackend:
 
     def verify_replacement(self, addresses, journal) -> bool:
         routes = [OwnedObject.parse(row) for row in journal['objects'] if row['kind'] == 'route']
-        return bool(addresses) and all(any(item.address == address and self._verified(item) for item in routes) for address in addresses)
+        return bool(addresses) and all(any(item.address == address and self._confirmed(item) for item in routes) for address in addresses)
 
     def change_legacy(self, entries: list[dict], action: str) -> None:
         for item in entries:

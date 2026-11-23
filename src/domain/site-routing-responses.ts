@@ -73,8 +73,11 @@ export function diagnostics(value: unknown): RoutingDiagnostics {
     let migration: MigrationPlan | null = null;
     if (item.migration !== null) {
         const plan = record(item.migration);
-        migration = {id: identity(plan.id), stage: text(plan.stage, 32), changes: list(plan.changes, entry => text(entry), 4096)};
+        migration = {id: identity(plan.id), stage: text(plan.stage, 32), changes: list(plan.changes, entry => text(entry), 4096),
+            detail: plan.detail === undefined ? '' : text(plan.detail)};
     }
     return {rule: rule(item.rule), addresses: list(item.addresses, address => text(address, 45), 256),
-        routes: list(item.routes, route, 256), protection: text(item.protection), migration};
+        routes: list(item.routes, route, 256), protection: text(item.protection), migration,
+        checked_at: item.checked_at === undefined || item.checked_at === null ? null : count(item.checked_at),
+        provider: item.provider === undefined || item.provider === null ? null : provider(item.provider)};
 }

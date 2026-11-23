@@ -1,5 +1,6 @@
 """System daemon lifecycle; settings windows and GNOME Shell may close at any time."""
 import signal
+import logging
 
 from .adguard import protected_tunnel
 from .authorization import PolkitAuthorizer
@@ -17,6 +18,7 @@ from .scheduler import ReconciliationWorker
 
 
 def serve(store, kernel, runner) -> None:
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
     gio, glib = bindings()
     bus = SystemBus(gio, glib)
     restore_guard(store, kernel)

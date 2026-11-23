@@ -12,6 +12,13 @@ reboot and AdGuard TUN/AUTO coexistence, has not been performed for this feature
 Treat it as experimental. See [the acceptance record](site-routing-acceptance.md)
 and [the original specification](site-routing-spec.md).
 
+A preliminary [Fedora review run](https://github.com/rxtcp/adguardvpn-gnome/pull/4#issuecomment-7106099077)
+confirmed one offline-deny snapshot but did not pass dual-VPN acceptance.
+[SR-UNDERLAY-01](vpn-underlay-prerequisite.md) tracks the VPN server/control
+connection as a separate release prerequisite. Site rules do not add endpoint
+exceptions or promise that a corporate VPN can establish its own connection
+through the intended underlay while another VPN controls the default policy.
+
 ## What protection means
 
 Rules operate on the A/AAAA addresses resolved by the controller. They affect
@@ -88,8 +95,21 @@ the optional passwordless AdGuard connect/disconnect permission.
 create another rule and explicitly remove the old one. **Remove** warns that
 the known addresses return to ordinary system routing, potentially through
 another VPN or the physical connection. **Check** shows known addresses and
-any eligible migration diff and the observed kernel routes. The list refreshes asynchronously every five
-seconds and includes per-family counts and the last successful DNS update.
+any eligible migration diff and the observed kernel routes. Check first
+reconciles the approved rules using cached DNS, then reports the checked-at
+time and provider snapshot. It distinguishes NM activated-without-tunnel from
+a disconnected profile and shows the last migration refusal. External NM/kernel
+state can still change between system calls or after the check; a timestamp is
+not a claim of an atomic whole-system capture.
+
+The list refreshes asynchronously every five seconds and includes per-family
+counts and the last successful DNS update. A restarted manager initially shows
+restoration in progress, rather than publishing a saved `active` label before
+rechecking the routes.
+
+If rule cleanup fails, removal reports the failure and keeps the previous rule
+visible with its protection and pending intent. Independently verified rules
+continue. Resolve the reported condition before retrying removal.
 
 | State | Meaning |
 | --- | --- |
@@ -100,6 +120,14 @@ seconds and includes per-family counts and the last successful DNS update.
 | `conflict` | Targets disagree about an IP or an unmanaged destination policy needs review. |
 | `apply-error` | Application failed. Read the detail; if guard installation failed, protection is explicitly unconfirmed. |
 | `provider-missing` | The saved provider was removed or is no longer accessible. Known addresses stay blocked. |
+
+Ordinary unmanaged destination overlaps and per-destination command/verification
+failures quarantine the affected IPs. Independently verified destinations retain
+their allow paths; unchanged paths keep a lookup while policy priorities move.
+Missing interfaces and partial writes retain known-IP guards and pending owned
+objects, which reconciliation retries after the tunnel returns with a new
+source address/name/index. A shared firewall failure, unsafe priority allocation
+or foreign object in a reserved owned table remains a conservative global stop.
 
 `active` verifies routing, not that a particular remote application is healthy
 or that every future DNS answer is already known. IPv4 is not left partly active
@@ -118,8 +146,11 @@ An overlapping destination policy blocks application and requires review.
 2. **Install protected replacement** authorizes the reviewed plan, retaining
    existing NM entries and saving a private, hashed backup of non-secret settings.
 3. Verify the protected target and both VPNs. **Remove listed legacy entries**
-   requires a separate confirmation. It refuses an unverified replacement and
-   deletes only the reviewed entries.
+   requires a separate confirmation. It freshly verifies every replacement
+   route before and after retiring entries, even if a prior snapshot was
+   `active`, and deletes only the reviewed entries. Only the migration's
+   destinations are denied during that transaction; independent allow paths
+   are preserved when their current kernel route can be reverified.
 4. **Roll back migration** restores only a matching before/after NM configuration
    and the reviewed kernel objects, then removes the replacement rule. This
    explicitly returns the hostname to its previous routing behavior.
@@ -130,6 +161,18 @@ profile requires administrator review; the service does not invent a replacement
 profile. No `GetSecrets` call is made and diagnostic responses do not expose
 whole profiles, private URL paths or credentials. Do not publish diagnostics
 containing your real domains or routes.
+
+A refused retirement keeps its existing stage (for example, `protected`) and
+records the reason in **Check**. A target disappearing during removal records
+`failed` with the backup and guards retained. Restoration of a verified tunnel
+allows automatic site-route recovery and a separately confirmed retry. An
+unsupported migration preview does not hide current provider/route diagnostics.
+
+The system journal records canonical domain, stable target ID, state, migration
+stage, route-binding changes and bounded operation reasons. Raw stderr, command
+arguments, profile settings/diffs, credentials, packet contents and URL paths
+are not logged. These records still identify private domains; redact them
+before sharing. See [the synchronized capture plan](vpn-underlay-prerequisite.md#collect-a-synchronized-redacted-bench-record).
 
 ## Update
 

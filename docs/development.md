@@ -32,6 +32,13 @@ dnspython and idna through Fedora packages. The original helper remains
 self-contained. See [site-routing.md](site-routing.md) for the trust boundary,
 guard-before-allow sequence, known-IP limits and installation/removal.
 
+`kernel_plan.py` isolates ordinary unapproved destination overlaps while
+planning owned objects; `kernel_changes.py` applies destinations independently
+and retains partial-write intent. `kernel.py` owns system inspection and the
+shared firewall boundary. Shared ownership/firewall failures remain global
+stops. `reconciliation_status.py` maps per-address outcomes and migration
+context; `reconciliation_log.py` records meaningful root-journal transitions.
+
 The TypeScript compiler uses `strict`, `noUncheckedIndexedAccess`,
 `noImplicitOverride`, unused-symbol checks and `noEmitOnError`. GNOME API types
 come from pinned `@girs` development dependencies. Generated JavaScript retains
@@ -97,7 +104,8 @@ The `routing-namespace` CI job additionally runs the actual Linux `ip` and `nft`
 programs with synthetic interfaces in a disposable network namespace. Its test
 entry is `tests/site_routing_namespace.py`, intentionally outside ordinary
 `test_*.py` discovery. It refuses root execution without a distinct parent
-namespace marker. To reproduce on a disposable Linux test host with `iproute2`,
+namespace marker. Each case creates a fresh child namespace using Python
+3.12+ `os.unshare`. To reproduce on a disposable Linux test host with `iproute2`,
 `nftables` and system `idna` installed:
 
 ```bash
@@ -110,6 +118,18 @@ Do not invoke the test directly in the host namespace. The runtime may also
 deny namespace/netlink capabilities; use CI or an authorized disposable host
 in that case. This test needs no internet peers or proprietary VPN client.
 It does not establish the real Fedora acceptance criteria.
+
+Recovery regressions use the actual manager and kernel backend with a
+deterministic kernel adapter, including a protected migration alongside an
+independent domain, stale public `active` at retirement, changed TUN source/index,
+priority changes without dropping stable lookups, partial cleanup and retained
+UI state. Diagnostic tests check fresh provider/routes, timestamp and refusal
+reason. Root logs identify domain/target/stage and operation category without
+raw stderr, URLs, private route arguments or profile settings.
+
+The separate [VPN underlay prerequisite](vpn-underlay-prerequisite.md) remains
+open. Its namespace reproduction is a characterization of the unexempted
+control flow, not successful live dual-VPN acceptance.
 
 ## Desktop smoke test
 

@@ -34,6 +34,17 @@ class QueuedExecutor:
 
 
 class CommandTests(unittest.TestCase):
+    def test_kernel_error_categories_are_actionable_without_exposing_arguments_or_raw_stderr(self):
+        runner = commands.CommandRunner()
+        for stderr in ('RTNETLINK answers: No such device', 'Cannot find device "fixturevpn"', 'Device "fixturevpn" does not exist.'):
+            with patch.object(commands.subprocess, 'run', return_value=SimpleNamespace(returncode=2, stdout='',
+                    stderr=stderr + '\nprivate fixture details')):
+                with self.assertRaisesRegex(RuntimeError, 'kernel interface disappeared') as failed:
+                    runner.write_ip(4, 'route', 'add', '198.51.100.8/32', 'dev', 'fixturevpn')
+            self.assertNotIn('198.51.100.8', str(failed.exception))
+            self.assertNotIn('fixturevpn', str(failed.exception))
+            self.assertNotIn('private fixture details', str(failed.exception))
+
     def test_numeric_kernel_output_has_stable_ids_and_canonical_protocol_scope_action_names(self):
         runner = commands.CommandRunner()
         rows = [{'table': '40000', 'protocol': '196', 'scope': '253', 'type': '1'},

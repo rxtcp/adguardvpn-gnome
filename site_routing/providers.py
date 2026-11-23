@@ -64,13 +64,17 @@ class ProviderRegistry:
             target = Target.parse({'kind': 'networkmanager', 'id': profile['uuid']})
             current = next((row for row in active if row.get('uuid') == target.id), {})
             paths = paths_from_active(current, links)
+            detail = 'Kernel tunnel and source addresses found; destination routing is verified separately.'
+            if not paths:
+                detail = ('NetworkManager reports activated, but no verified kernel tunnel/IP configuration is available.'
+                          if current.get('state') == 2 else 'NetworkManager VPN is disconnected or not yet activated.')
             allowed = None
             if profile['type'] == 'wireguard':
                 allowed = tuple(str(ipaddress.ip_network(value, strict=False))
                     for peer in profile.get('settings', {}).get('wireguard', {}).get('peers', [])
                     for value in peer.get('allowed-ips', []))
             result[target.key] = Provider(target, profile['name'], paths, nameservers(current), tuple(profile.get('users', ())),
-                                           allowed_networks=allowed)
+                                           detail=detail, allowed_networks=allowed)
         physical = sorted((row for row in active if row.get('type') in PHYSICAL_TYPES),
                           key=lambda row: min((entry.get('metric', 600) for entry in row.get('ip4', {}).get('RouteData', []) if entry.get('prefix') == 0), default=600))
         direct = next(((row, paths_from_active(row, links, tunnel=False)) for row in physical if paths_from_active(row, links, tunnel=False)), ({}, {}))

@@ -2,7 +2,8 @@ import type {RoutingStatus} from './site-routing-types.js';
 
 export const protectionNotice = 'Protection applies only to known IP addresses. Shared IPs affect other hosts; ' +
     'application DoH/DoT and unknown cached addresses are outside this guarantee. ' +
-    'DNS queries may use the system resolver. A missing target blocks known IPs; VPNs are never started automatically.';
+    'DNS queries may use the system resolver. A missing target blocks known IPs; VPNs are never started automatically. ' +
+    'The VPN server/control connection needs a separately verified underlay path when combining VPNs.';
 
 export function normalizeSiteDomain(value: string, toAscii: (host: string) => string | null): string {
     const text = value.trim();

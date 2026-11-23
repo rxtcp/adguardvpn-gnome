@@ -25,6 +25,10 @@ test('typed responses reject every unsafe field class and accept all provider id
     assert.equal(parse.diagnostics({...diagnosis, routes}).routes[1].table, 'main');
     for (const replacement of [{dev: 1}, {gateway: {}}, {type: false}, {table: null}, {table: -1}])
         assert.throws(() => parse.diagnostics({...diagnosis, routes: [{address: '198.51.100.8', ...replacement}]}));
+    assert.equal(parse.diagnostics({...diagnosis, routes: [], checked_at: null, provider: null}).checked_at, null);
+    for (const replacement of [{checked_at: -1}, {checked_at: 'now'}, {provider: {active: true}},
+        {migration: {id, stage: 'protected', changes: [], detail: 7}}])
+        assert.throws(() => parse.diagnostics({...diagnosis, routes: [], ...replacement}));
 });
 
 test('protocol rejects non-object data, invalid boolean/version and malformed errors', async () => {

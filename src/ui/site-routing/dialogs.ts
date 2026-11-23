@@ -31,9 +31,14 @@ export function confirm(window: Adw.PreferencesWindow, title: string, body: stri
 export function showDiagnostics(window: Adw.PreferencesWindow, diagnosis: RoutingDiagnostics,
     migrate: (plan: MigrationPlan, stage: MigrationStage) => void): void {
     const plan = diagnosis.migration;
-    const text = [diagnosis.protection, `Known addresses:\n${diagnosis.addresses.join('\n')}`,
+    const provider = diagnosis.provider;
+    const checked = diagnosis.checked_at ? new Date(diagnosis.checked_at * 1000).toLocaleString() : 'Unavailable from this service version';
+    const providerState = provider ? `${provider.name}: ${provider.active ? 'verified paths available' : 'no verified path'}. ${provider.detail}`
+        : `Provider unavailable: ${diagnosis.rule.target.kind}:${diagnosis.rule.target.id}`;
+    const text = [`Checked at: ${checked}`, providerState, diagnosis.protection, `Known addresses:\n${diagnosis.addresses.join('\n')}`,
         `Observed kernel routes:\n${diagnosis.routes.map(route => JSON.stringify(route)).join('\n')}`,
-        plan ? `Exact migration diff (${plan.stage}):\n${plan.changes.join('\n')}` : 'No eligible legacy NM entries were found.'].join('\n\n');
+        plan ? `Migration: ${plan.stage}\n${plan.detail || 'No migration error recorded.'}\nExact migration diff:\n${plan.changes.join('\n')}`
+            : 'No eligible legacy NM entries were found.'].join('\n\n');
     const dialog = new Adw.MessageDialog({transient_for: window, modal: true,
         heading: diagnosis.rule.domain, body: diagnosis.rule.detail, body_use_markup: false,
         extra_child: details(text)});

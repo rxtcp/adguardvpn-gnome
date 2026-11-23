@@ -7,6 +7,24 @@ NFT = '/usr/sbin/nft'
 ENVIRONMENT = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
 
 
+def failure_reason(stderr: str) -> str:
+    text = stderr.lower()
+    if text.startswith('device ') and 'does not exist' in text:
+        return 'kernel interface disappeared'
+    for phrase, reason in (
+        ('no such device', 'kernel interface disappeared'),
+        ('cannot find device', 'kernel interface disappeared'),
+        ('network is unreachable', 'kernel reports the network is unreachable'),
+        ('operation not permitted', 'permission was denied'),
+        ('permission denied', 'permission was denied'),
+        ('file exists', 'an existing object prevents installation'),
+        ('invalid argument', 'kernel rejected the operation parameters'),
+    ):
+        if phrase in text:
+            return reason
+    return 'network command failed'
+
+
 class CommandRunner:
     def run(self, argv: list[str], input_text: str | None = None) -> str:
         try:
@@ -16,7 +34,8 @@ class CommandRunner:
         except (OSError, subprocess.TimeoutExpired) as error:
             raise RuntimeError('A required network command is unavailable or timed out.') from error
         if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
-            raise RuntimeError('A network command failed; no successful routing state was confirmed.')
+            reason = failure_reason(getattr(result, 'stderr', ''))
+            raise RuntimeError(f'{reason}; no successful routing state was confirmed.')
         return result.stdout
 
     def read_ip(self, family: int, *args: str) -> list:

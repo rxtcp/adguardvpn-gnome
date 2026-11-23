@@ -17,6 +17,20 @@ ACTIVE = {'state': 2, 'uuid': NM_ID, 'interfaces': ['fixturewan'],
 
 
 class ProviderTests(unittest.TestCase):
+    def test_activated_without_tun_has_a_different_reason_from_a_disconnected_profile(self):
+        class Reader:
+            def snapshot(self):
+                return {'profiles': [{'uuid': NM_ID, 'type': 'vpn', 'name': 'Fixture VPN'}], 'links': [],
+                        'active': [{'uuid': NM_ID, 'state': 2}]}
+        reader = Reader()
+        registry = ProviderRegistry(reader, lambda: {'installed': False})
+        provider = registry.discover()['networkmanager:' + NM_ID]
+        self.assertFalse(provider.paths)
+        self.assertIn('activated', provider.detail)
+        self.assertIn('no verified kernel tunnel', provider.detail)
+        reader.snapshot = lambda: {'profiles': [{'uuid': NM_ID, 'type': 'vpn', 'name': 'Fixture VPN'}], 'links': [], 'active': []}
+        self.assertIn('disconnected', registry.discover()['networkmanager:' + NM_ID].detail)
+
     def test_nm_activation_alone_is_not_a_verified_tunnel(self):
         self.assertEqual(paths_from_active(ACTIVE, []), {})
         self.assertEqual(paths_from_active({**ACTIVE, 'state': 1}, LINKS), {})

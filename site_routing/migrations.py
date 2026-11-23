@@ -7,7 +7,7 @@ from .migration_matching import matches_profile
 
 
 def public_plan(plan: dict) -> dict:
-    return {'id': plan['id'], 'stage': plan['stage'], 'changes': list(plan['changes'])}
+    return {'id': plan['id'], 'stage': plan['stage'], 'changes': list(plan['changes']), 'detail': plan.get('last_error', '')}
 
 
 class MigrationManager:
@@ -59,18 +59,27 @@ class MigrationManager:
         plan = state['migrations'].get(request['id'])
         if not plan or plan['rule_id'] != rule['id'] or plan['owner_uid'] != rule['owner_uid'] or (request['stage'] != 'rollback' and plan['target'] != rule['target']):
             raise ValueError('This migration plan is stale or belongs to another rule.')
-        stage, profiles = request['stage'], self._profiles(plan)
+        try:
+            self._apply(state, rule, plan, request['stage'])
+        except (OSError, RuntimeError, ValueError) as error:
+            plan['last_error'] = str(error)[:2048]
+            self.store.save(state)
+            raise
+        plan.pop('last_error', None)
+
+    def _apply(self, state: dict, rule: dict, plan: dict, stage: str) -> None:
+        profiles = self._profiles(plan)
         if stage == 'protect':
             if plan['stage'] not in ('preview', 'protected') or any(settings_hash(profiles[backup['uuid']]['settings']) != backup['before_hash'] for backup in plan['profiles']):
                 raise ValueError('NM settings changed; review a new diff before proceeding.')
             plan['stage'] = 'protected'
             return
         if stage == 'retire' and (plan['stage'] not in ('protected', 'retiring', 'failed', 'retired') or
-                (rule['status'] != 'active' and not self.kernel.verify_replacement(rule['addresses'], state['kernel']))):
-            raise ValueError('Verify an active protected replacement before separately confirming legacy removal.')
+                not self.kernel.verify_replacement(rule['addresses'], state['kernel'])):
+            raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
         if stage == 'rollback' and plan['stage'] not in ('protected', 'retired', 'failed', 'retiring', 'rolling-back'):
             raise ValueError('There is no applied migration to roll back.')
-        self.kernel.block(state['kernel']['known'], state['installation_id'])
+        self.kernel.protect_subset(rule['addresses'], state['kernel'], state['installation_id'])
         plan['stage'] = 'retiring' if stage == 'retire' else 'rolling-back'
         self.store.save(state)  # Backups and transition intent survive a mid-update crash.
         try:
@@ -83,6 +92,8 @@ class MigrationManager:
                 if current != expected:
                     self.reader.update(profile, backup['after'] if stage == 'retire' else backup['before'])
             self.kernel.change_legacy(plan['overlaps'], 'del' if stage == 'retire' else 'add')
+            if stage == 'retire' and not self.kernel.verify_replacement(rule['addresses'], state['kernel']):
+                raise ValueError('Replacement disappeared during legacy removal; guards and backup are retained. Retry or roll back.')
         except (OSError, RuntimeError, ValueError):
             plan['stage'] = 'failed'
             rule['migration_error'] = 'Migration failed; guards and the verified backup are retained. Retry or roll back.'

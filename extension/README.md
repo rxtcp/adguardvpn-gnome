@@ -39,6 +39,11 @@ privileged installers and separate authorization policies.
 Site Routing changes require Polkit confirmation. Its IP-based protection does
 not cover unknown cached addresses or application DoH/DoT; shared IPs affect
 other hosts. A URL rule applies to its entire exact host, not only a path.
+The VPN server/control connection requires a separately verified underlay;
+site rules do not add endpoint exceptions. **Check** shows a checked-at time,
+provider reason and the last migration refusal. Ordinary per-destination
+failures keep independently verified rules working, and tunnel recovery is
+retried without restarting the extension.
 See the repository's [Site Routing guide](https://github.com/rxtcp/adguardvpn-gnome/blob/main/docs/site-routing.md)
 for installation, migration/rollback, statuses and limitations. The extension
 ZIP contains the preferences UI, not the privileged routing service.

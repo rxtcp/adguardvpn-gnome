@@ -106,6 +106,11 @@ unavailable, known destination IPs remain blocked. Shared IPs, unknown cached
 addresses, application DoH/DoT and DNS changes before synchronization limit this
 IP-based guarantee; DNS query privacy is not separately guaranteed.
 
+The VPN's own server/control connection needs a separately verified underlay.
+Site rules do not install server-endpoint exceptions. The reported Fedora
+dual-VPN acceptance remains unsuccessful; see the blocking prerequisite
+[SR-UNDERLAY-01](docs/vpn-underlay-prerequisite.md).
+
 This requires a **separate** optional system component. After installing the
 extension, review [docs/site-routing.md](docs/site-routing.md), then run from
 the repository root on the Fedora test machine:
@@ -122,6 +127,12 @@ rule/migration change requires confirmation, while automatic restoration of
 approved rules does not. It remains running when the preferences window or
 extension closes. Empty rules make no network changes. Existing manual host
 policies require an exact diff, private backup and separate migration approvals.
+
+An ordinary legacy conflict or a destination write failure blocks the affected
+IPs while independently verified rules continue. Tunnel recreation is retried
+automatically. **Check** reconciles approved routes and shows a timestamp,
+provider reason and the last migration refusal. Legacy retirement always
+rechecks the replacement rather than trusting an earlier `active` label.
 
 Installation, updating, errors, migration and rollback are described in
 [docs/site-routing.md](docs/site-routing.md). The

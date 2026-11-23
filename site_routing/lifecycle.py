@@ -39,3 +39,5 @@ def release_all(store, kernel) -> None:
             store.save(state)
         state['kernel'] = kernel.apply({}, state['kernel'], state['installation_id'], checkpoint=checkpoint)
         store.save(state)
+        if state['kernel'].get('failures'):
+            raise RuntimeError('Some owned policies could not be released; protection and pending intent are retained.')
