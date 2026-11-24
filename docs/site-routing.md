@@ -83,6 +83,18 @@ To retain AdGuard TUN/AUTO with a NetworkManager OpenVPN connection, use the
 [optional marked launcher and approved uplink setup](vpn-underlay-prerequisite.md#marked-openvpn-transport-with-tunauto).
 The ordinary installer does not patch distribution packages or opt a profile in.
 
+### Verified NetworkManager tunnel devices
+
+Site Routing needs NetworkManager's D-Bus `InterfaceIndex` for each address
+family it routes through a saved NM VPN (including WireGuard). On the Fedora
+bench, apply the [NetworkManager 1.50.3 interface-index patch](../packaging/NetworkManager-1.50.3-site-routing-interface-index.patch)
+to the matching NetworkManager source RPM and rebuild and install its matching
+packages. Activate the rebuilt daemon in a planned maintenance window. The
+property is read-only and reports the kernel index from NetworkManager's L3
+configuration. With a stock daemon lacking the property, existing and saved NM
+VPN targets remain selectable and their known addresses stay blocked. Direct
+and protected AdGuard targets use their own verification paths.
+
 Open **Site Routing…** in the toggle's menu, or run:
 
 ```bash
@@ -135,9 +147,10 @@ failures quarantine the affected IPs. Independently verified destinations retain
 their allow paths; unchanged paths keep a lookup while policy priorities move.
 Missing interfaces and partial writes retain known-IP guards and pending owned
 objects. NetworkManager VPN discovery requires the activation's IP configuration
-object to match a realized tunnel device. The reader checks the kernel interface
-index against the index it recorded for that binding. Reconciliation resumes
-when NetworkManager confirms the replacement.
+object to match a realized tunnel device and report the live kernel interface
+index. The same check applies on the first observation, including after a
+manager restart. Reconciliation resumes when NetworkManager confirms the
+replacement.
 A shared firewall failure, unsafe priority allocation
 or foreign object in a reserved owned table remains a conservative global stop.
 
@@ -170,10 +183,11 @@ An overlapping destination policy blocks application and requires review.
 
 Retirement and rollback check the profile version during the write. If
 NetworkManager reports a concurrent edit or cannot provide a usable version,
-the migration refuses the write. Recheck previews saved before exact-entry
-verification. An already applied older plan retains its rollback path, with
-the usual profile and kernel checks. Partial
-failure retains the backup and guards and offers retry/rollback. A missing
+the migration refuses the write. For an older plan still at `protected`, use
+**Check** to prepare a new diff. The assignment and known addresses stay in
+place, and **Install protected replacement** can authorize the new diff after
+review. Plans that may already have changed NM settings retain their rollback
+path. Partial failure retains the backup and guards and offers retry/rollback. A missing
 profile requires administrator review; the service does not invent a replacement
 profile. Reassignment is a separate operation. Changing or removing the saved
 assignment invalidates its overlap approval while preserving the backup. No

@@ -11,12 +11,17 @@ def public_plan(plan: dict) -> dict:
     return {'id': plan['id'], 'stage': plan['stage'], 'changes': list(plan['changes']), 'detail': plan.get('last_error', '')}
 
 
+def can_refresh_preview(plan: dict) -> bool:
+    return plan['stage'] == 'preview' or (plan['stage'] == 'protected' and plan.get('exact_entries') is not True)
+
+
 class MigrationManager:
     def __init__(self, store, reader, kernel):
         self.store, self.reader, self.kernel = store, reader, kernel
 
     def preview(self, state: dict, rule: dict) -> dict | None:
-        existing = [plan for plan in state['migrations'].values() if plan['rule_id'] == rule['id'] and plan['stage'] not in ('preview', 'rolled-back')]
+        existing = [plan for plan in state['migrations'].values() if plan['rule_id'] == rule['id']
+                    and plan['stage'] != 'rolled-back' and not can_refresh_preview(plan)]
         if existing:
             return public_plan(existing[-1])
         profiles, changes, matched = [], [], {}
@@ -47,7 +52,8 @@ class MigrationManager:
         if len(matched) != len(overlaps):
             raise ValueError('Some overlapping policies cannot be matched exactly to NM settings; no automatic deletion is allowed.')
         identity = str(uuid.uuid4())
-        state['migrations'] = {key: plan for key, plan in state['migrations'].items() if plan['rule_id'] != rule['id'] or plan['stage'] != 'preview'}
+        state['migrations'] = {key: plan for key, plan in state['migrations'].items()
+                               if plan['rule_id'] != rule['id'] or not can_refresh_preview(plan)}
         plan = {'id': identity, 'rule_id': rule['id'], 'owner_uid': rule['owner_uid'],
                 'target': rule['target'], 'stage': 'preview', 'profiles': profiles,
                 'overlaps': overlaps, 'changes': changes, 'exact_entries': True}

@@ -138,6 +138,40 @@ class MigrationTests(unittest.TestCase):
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
         self.assertEqual(saved['stage'], 'rolled-back')
 
+    def test_check_replaces_an_unverified_protected_plan_without_removing_the_assignment(self):
+        old = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': old['id'], 'stage': 'protect'})
+        del self.state['migrations'][old['id']]['exact_entries']
+        before = copy.deepcopy(self.profile['settings'])
+        known = copy.deepcopy(self.rule['addresses'])
+
+        new = self.manager.preview(self.state, self.rule)
+        self.assertNotEqual(new['id'], old['id'])
+        self.assertEqual(new['stage'], 'preview')
+        self.assertNotIn(old['id'], self.state['migrations'])
+        self.assertEqual(self.state['rules'], [self.rule])
+        self.assertEqual(self.rule['addresses'], known)
+        self.assertEqual(self.profile['settings'], before)
+        self.assertFalse(self.kernel.events)
+        self.assertFalse(self.manager.approved(self.state))
+        self.manager.apply(self.state, self.rule, {'id': new['id'], 'stage': 'protect'})
+        self.manager.apply(self.state, self.rule, {'id': new['id'], 'stage': 'retire'})
+        self.assertEqual(self.state['rules'], [self.rule])
+        self.assertEqual(self.profile['settings']['ipv4']['routing-rules'], [])
+
+    def test_check_preserves_the_older_backup_when_a_new_protected_diff_cannot_be_verified(self):
+        old = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': old['id'], 'stage': 'protect'})
+        stored = self.state['migrations'][old['id']]
+        del stored['exact_entries']
+        with patch.object(self.kernel, 'overlaps', return_value=[]):
+            with self.assertRaisesRegex(ValueError, 'matched exactly'):
+                self.manager.preview(self.state, self.rule)
+        self.assertEqual(self.state['migrations'], {old['id']: stored})
+        self.assertEqual(self.state['rules'], [self.rule])
+        self.assertFalse(self.manager.approved(self.state))
+        self.assertFalse(self.kernel.events)
+
     def test_modern_nm_rule_uses_separate_to_length_and_diff_contains_exact_fields(self):
         self.profile['settings']['ipv4']['routing-rules'] = [{'to': '198.51.100.8', 'to-len': 32, 'table': 777, 'priority': 900}]
         self.profile['serialized'] = json.dumps(self.profile['settings'])

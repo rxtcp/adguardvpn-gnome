@@ -85,3 +85,26 @@ jobs:
             src/openvpn/openvpn --version > version.txt
             grep -F '[SiteRouting-SO_MARK]' version.txt
           )
+
+  networkmanager-interface-index:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install NetworkManager build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build gettext xsltproc libdbus-1-dev libglib2.0-dev \
+            libgnutls28-dev libndp-dev libsystemd-dev libudev-dev uuid-dev
+      - name: Build NetworkManager with both IP configuration properties
+        run: |
+          mkdir -p .tmp/upstream
+          curl -fsSL https://codeload.github.com/NetworkManager/NetworkManager/tar.gz/refs/tags/1.50.3 \
+            | tar -xz -C .tmp/upstream
+          patch -d .tmp/upstream/NetworkManager-1.50.3 -p1 < packaging/NetworkManager-1.50.3-site-routing-interface-index.patch
+          cd .tmp/upstream/NetworkManager-1.50.3
+          meson setup build -Dcrypto=gnutls -Dintrospection=false -Dvapi=false -Dtests=no \
+            -Dpolkit=false -Dselinux=false -Dlibaudit=no -Dlibpsl=false -Dppp=false \
+            -Dmodem_manager=false -Dwifi=false -Dovs=false -Dconcheck=false \
+            -Dnm_cloud_setup=false -Dnmtui=false -Dqt=false -Debpf=false
+          ninja -C build -j2 src/core/NetworkManager

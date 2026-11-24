@@ -107,12 +107,16 @@ addresses, application DoH/DoT and DNS changes before synchronization limit this
 IP-based guarantee; DNS query privacy is not separately guaranteed.
 
 The VPN's own server/control connection needs a separately verified underlay.
+Site Routing for saved NM VPNs also requires a NetworkManager build that reports
+the kernel interface index. With stock builds lacking that property, known IPs
+assigned to NM VPNs stay blocked. [NetworkManager patch and setup](docs/site-routing.md#verified-networkmanager-tunnel-devices)
+
 If AdGuard is needed only for explicitly assigned sites, see the optional
 [TUN/NONE setup](docs/vpn-underlay-prerequisite.md#site-only-adguard-routing-with-tunnone).
 Unassigned traffic follows ordinary system routing in that setup.
 For system-wide AdGuard, the optional
 [marked TUN/AUTO setup](docs/vpn-underlay-prerequisite.md#marked-openvpn-transport-with-tunauto)
-requires both patched packages and an approved NetworkManager uplink. Live
+requires the patched OpenVPN launcher and client and an approved NetworkManager uplink. Live
 Fedora acceptance remains open.
 
 This requires a **separate** optional system component. After installing the

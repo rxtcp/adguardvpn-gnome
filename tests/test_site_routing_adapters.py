@@ -118,6 +118,9 @@ class NetworkManagerAdapterTests(unittest.TestCase):
                 self.physical = {'Uuid': 'uplink', 'Id': 'Fixture uplink', 'Type': '802-3-ethernet', 'State': 2,
                                  'Devices': ['/device'], 'Ip4Config': '/uplink-ip4'}
                 self.tunnel = {'IpInterface': 'fixturevpn', 'Ip4Config': '/ip4', 'ActiveConnection': '/'}
+                self.ip4 = {'AddressData': [{'address': '192.0.2.2'}], 'InterfaceIndex': 17}
+                self.ip4_new = {**self.ip4, 'InterfaceIndex': 27}
+                self.ip6 = {'AddressData': [{'address': '2001:db8::2'}], 'InterfaceIndex': 17}
             def networkmanager_owner(self): return self.owner
             def profile_version(self, owner, path): return 21
             def call(self, *args): return (['/profile'] * self.count,)
@@ -128,8 +131,8 @@ class NetworkManagerAdapterTests(unittest.TestCase):
                 if self.broken: raise RuntimeError('NM restarting')
                 return {'/org/freedesktop/NetworkManager': self.manager, '/active': self.active, '/physical': self.physical,
                          '/device': {'Interface': 'fixturewan', 'Ip4Config': '/uplink-ip4', 'ActiveConnection': '/physical'},
-                         '/tun': self.tunnel, '/ip4': {'AddressData': [{'address': '192.0.2.2'}]},
-                         '/ip4-new': {'AddressData': [{'address': '192.0.2.2'}]},
+                         '/tun': self.tunnel, '/ip4': self.ip4, '/ip4-new': self.ip4_new,
+                         '/ip6': self.ip6,
                          '/uplink-ip4': {'AddressData': [{'address': '192.0.2.3'}]}}[path]
             def update_settings(self, path, serialized, *, owner, version):
                 self.updated = path, serialized, owner, version
@@ -180,6 +183,8 @@ class NetworkManagerAdapterTests(unittest.TestCase):
         self.bus.physical['State'] = 1
         self.links[0]['ifindex'] = 37
         self.bus.owner = ':1.28'
+        self.assertEqual(binding(), {})
+        self.bus.ip4_new['InterfaceIndex'] = 37
         self.assertEqual(binding(), {4: (37,)})
         self.bus.manager['Devices'] *= 513
         self.assertEqual(self.reader.snapshot()['active'], [])
@@ -192,6 +197,28 @@ class NetworkManagerAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'overwrite was refused'):
             self.reader.update({**profile, 'settings': {}}, 'irrelevant')
         self.assertIsNone(self.bus.updated)
+
+    def test_first_snapshot_after_manager_restart_refuses_a_reused_interface_name(self):
+        self.assertEqual(self.reader.snapshot()['active'][0]['tunnel_indices'], {4: (17,)})
+        self.links[0]['ifindex'] = 27
+        self.assertEqual(self.reader.snapshot()['active'][0]['tunnel_indices'], {})
+        restarted = NetworkManagerReader(self.bus, self.reader.runner)
+        self.assertEqual(restarted.snapshot()['active'][0]['tunnel_indices'], {})
+        self.bus.active['Ip4Config'] = self.bus.tunnel['Ip4Config'] = '/ip4-new'
+        self.assertEqual(restarted.snapshot()['active'][0]['tunnel_indices'], {4: (27,)})
+
+    def test_first_snapshot_requires_a_positive_index_from_networkmanager(self):
+        del self.bus.ip4['InterfaceIndex']
+        self.assertEqual(self.reader.snapshot()['active'][0]['tunnel_indices'], {})
+        for invalid in (0, True, '17'):
+            self.bus.ip4['InterfaceIndex'] = invalid
+            self.assertEqual(self.reader.snapshot()['active'][0]['tunnel_indices'], {})
+
+    def test_each_family_requires_its_own_matching_nm_interface_index(self):
+        self.bus.active['Ip6Config'] = self.bus.tunnel['Ip6Config'] = '/ip6'
+        self.assertEqual(self.reader.snapshot()['active'][0]['tunnel_indices'], {4: (17,), 6: (17,)})
+        self.bus.ip6['InterfaceIndex'] = 27
+        self.assertEqual(self.reader.snapshot()['active'][0]['tunnel_indices'], {4: (17,)})
 
 
 class ProtectedAdguardAdapterTests(unittest.TestCase):

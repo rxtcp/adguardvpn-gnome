@@ -25,10 +25,12 @@ real Gio/GLib variants with an injected bus. CI enforces 100% extension
 line/branch/function and Python statement/branch coverage, including the new
 manager and installed bootstrap; it does not exclude the privileged code.
 
-The adapter regressions cover stale VPN activations with reused tunnel
-addresses, NetworkManager profile edits during migration, and saved selectors
-without a matching live policy. Installer checks cover the guard dependency
-ordering during update and removal.
+The adapter regressions cover stale VPN activations with reused interface
+names and addresses across manager restart, NetworkManager profile edits during
+migration, and saved selectors without a matching live policy. An older
+protected migration can get a fresh diff with its assignment and known IPs
+intact. Installer checks cover update and removal dependency ordering.
+CI builds the NetworkManager patch that exports the interface index.
 
 The separate `routing-namespace` CI job runs the real `ip` and `nft` programs
 inside a new root Linux network namespace, using synthetic dummy interfaces

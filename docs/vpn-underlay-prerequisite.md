@@ -2,7 +2,9 @@
 
 **Status: opt-in TUN/AUTO adapter; live Fedora acceptance pending.** The adapter
 scopes the external OpenVPN transport to a reviewed NetworkManager base profile.
-The installed distribution packages need the two compatibility patches below.
+The launcher and OpenVPN transport require the two compatibility patches below.
+Site assignments targeting the resulting tunnel also require the
+[NetworkManager interface-index patch](site-routing.md#verified-networkmanager-tunnel-devices).
 For site-only AdGuard routing, the protected TUN can instead run in `NONE` mode.
 
 ## Marked OpenVPN transport with TUN/AUTO

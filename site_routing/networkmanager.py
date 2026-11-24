@@ -12,7 +12,6 @@ IP_CONFIG = {4: 'Ip4Config', 6: 'Ip6Config'}
 class NetworkManagerReader:
     def __init__(self, bus, runner):
         self.bus, self.runner = bus, runner
-        self.tunnel_indices = {}
 
     def profiles(self, *, owner=NM) -> list[dict]:
         paths = self.bus.call(owner, SETTINGS, NM + '.Settings', 'ListConnections')[0]
@@ -45,11 +44,10 @@ class NetworkManagerReader:
         return [{**profile, 'interfaces': [name for active in snapshot['active'] if active['uuid'] == profile['uuid']
                                            for name in active['interfaces']]} for profile in snapshot['profiles']]
 
-    def _verified_tunnel_indices(self, owner, activations, devices, links):
+    @staticmethod
+    def _verified_tunnel_indices(activations, devices, ip_configs, links):
         # NM shares an IP configuration object between its VPN activation and the
         # device for that interface. The VPN activation's Devices list is the base.
-        device_keys = {(owner, path, device.get(field)) for path, device in devices.items() for field in IP_CONFIG.values()}
-        self.tunnel_indices = {key: index for key, index in self.tunnel_indices.items() if key in device_keys}
         link_indices = {link['ifname']: link['ifindex'] for link in links}
         claims = Counter((field, active.get(field)) for active in activations.values() if active['Type'] in TUNNEL_PROFILES
                          and active['State'] == 2 for field in IP_CONFIG.values())
@@ -68,12 +66,11 @@ class NetworkManagerReader:
                              device_path in selected_devices and device.get('ActiveConnection') == path)]
                 if len(matching) != 1:
                     continue
-                device_path = matching[0]
-                device = devices[device_path]
+                device = devices[matching[0]]
                 name = device.get('IpInterface') or device.get('Interface')
-                index = link_indices.get(name)
-                # A stale object must never adopt a new kernel link of the same name.
-                if index and self.tunnel_indices.setdefault((owner, device_path, config), index) == index:
+                # The index comes from NM's IP configuration, not a local name lookup.
+                index = ip_configs[config].get('InterfaceIndex')
+                if type(index) is int and index > 0 and link_indices.get(name) == index:
                     result.setdefault(path, {})[family] = (index,)
         return result
 
@@ -88,7 +85,13 @@ class NetworkManagerReader:
                 raise RuntimeError('NetworkManager active connection or device limit exceeded.')
             activations = {path: self.bus.properties(owner, path, NM + '.Connection.Active') for path in paths}
             devices = {path: self.bus.properties(owner, path, NM + '.Device') for path in device_paths}
-            tunnel_bindings = self._verified_tunnel_indices(owner, activations, devices, links)
+            ip_configs = {'/': {}}
+            for properties in activations.values():
+                for family, field in IP_CONFIG.items():
+                    config = properties.get(field, '/')
+                    if config not in ip_configs:
+                        ip_configs[config] = self.bus.properties(owner, config, NM + f'.IP{family}Config')
+            tunnel_bindings = self._verified_tunnel_indices(activations, devices, ip_configs, links)
             active = []
             for path, properties in activations.items():
                 indices = tunnel_bindings.get(path, {})
@@ -97,10 +100,8 @@ class NetworkManagerReader:
                 else:
                     interfaces = [device.get('IpInterface') or device.get('Interface')
                                   for name in properties.get('Devices', []) if (device := devices.get(name))]
-                configurations = {}
-                for family, field in IP_CONFIG.items():
-                    config = properties.get(field, '/')
-                    configurations[f'ip{family}'] = self.bus.properties(owner, config, NM + f'.IP{family}Config') if config != '/' else {}
+                configurations = {f'ip{family}': ip_configs[properties.get(field, '/')]
+                                  for family, field in IP_CONFIG.items()}
                 active.append({'uuid': properties['Uuid'], 'name': properties['Id'], 'type': properties['Type'],
                                'state': properties['State'], 'interfaces': interfaces, 'tunnel_indices': indices, **configurations})
             return {'profiles': profiles, 'active': active, 'links': links}
