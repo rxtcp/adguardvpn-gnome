@@ -114,11 +114,18 @@ class KernelBackend:
             raise RuntimeError('The legacy route interface identity cannot be verified.')
         return {'ifindex': indices[0], 'boot_id': BOOT_ID_PATH.read_text(encoding='ascii').strip()}
 
-    def change_legacy(self, item: dict, action: str, *, binding: dict | None = None) -> dict | None:
+    def _legacy_present(self, item: dict) -> bool:
+        arguments = ('route', 'show', 'table', 'all') if item['kind'] == 'route' else ('rule', 'show')
+        return item['data'] in self.runner.read_ip(item['family'], *arguments)
+
+    def legacy_present(self, item: dict, *, binding: dict | None = None) -> bool:
+        return self._legacy_present(item) and (binding is None or item['kind'] == 'rule' or
+                                              self._legacy_route_binding(item) == binding)
+
+    def change_legacy(self, item: dict, action: str, *, binding: dict | None = None, before_delete=None) -> dict | None:
         arguments = legacy_arguments(item, action)
         route = item['kind'] == 'route'
-        rows = self.runner.read_ip(item['family'], item['kind'], 'show', *(['table', 'all'] if route else []))
-        present = item['data'] in rows
+        present = self._legacy_present(item)
         if action == 'del' and not present:
             return None
         current = self._legacy_route_binding(item) if route else {}
@@ -126,5 +133,10 @@ class KernelBackend:
             raise RuntimeError('The legacy route interface identity changed. Review the NetworkManager connection before removing protection.')
         if action == 'add' and present:
             return None
-        self.runner.write_ip(item['family'], *arguments)
+        if action == 'del' and before_delete is not None:
+            before_delete(current)
+        if route and action == 'add':
+            self.runner.restore_legacy_route(item, current['ifindex'])
+        else:
+            self.runner.write_ip(item['family'], *arguments)
         return current

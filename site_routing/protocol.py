@@ -4,6 +4,7 @@ from .models import Target, canonical_uuid
 
 READ_OPERATIONS = frozenset(('list-providers', 'list-rules', 'diagnose-rule'))
 WRITE_OPERATIONS = frozenset(('add-rule', 'update-rule', 'remove-rule'))
+ROLLBACK_STAGES = ('protected', 'retired', 'failed', 'retiring', 'rolling-back')
 
 
 def validate_request(value: object) -> dict:
@@ -25,9 +26,16 @@ def validate_request(value: object) -> dict:
             request['id'] = canonical_uuid(request.get('id'))
             if 'migration' in request:
                 migration = request['migration']
-                if not isinstance(migration, dict) or set(migration) != {'id', 'stage'} or migration['stage'] not in ('protect', 'retire', 'rollback'):
+                if not isinstance(migration, dict) or migration.get('stage') not in ('protect', 'retire', 'rollback'):
                     raise ValueError('Invalid migration operation.')
-                request['migration'] = {'id': canonical_uuid(migration['id']), 'stage': migration['stage']}
+                fields = {'id', 'stage'}
+                if migration['stage'] == 'rollback':
+                    fields.add('expected_stage')
+                    if migration.get('expected_stage') not in ROLLBACK_STAGES:
+                        raise ValueError('Rollback requires a current migration stage. Use Check and confirm again.')
+                if set(migration) != fields:
+                    raise ValueError('Invalid migration operation.')
+                request['migration'] = {**migration, 'id': canonical_uuid(migration['id'])}
     else:
         raise ValueError('Unsupported Site Routing operation.')
     if set(value) - allowed:

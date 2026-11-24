@@ -5,6 +5,11 @@ import json
 from .migration_fields import settings_hash, settings_removals
 from .migration_matching import matches_entry
 from .models import Target
+from .protocol import ROLLBACK_STAGES
+
+
+class StaleMigrationConfirmation(ValueError):
+    pass
 
 
 def public_plan(plan: dict, *, detail: str | None = None) -> dict:
@@ -92,6 +97,8 @@ class MigrationManager:
         plan = state['migrations'].get(request['id'])
         if not plan or plan['rule_id'] != rule['id'] or plan['owner_uid'] != rule['owner_uid'] or (request['stage'] != 'rollback' and plan['target'] != rule['target']):
             raise ValueError('This migration plan is stale or belongs to another rule.')
+        if request['stage'] == 'rollback' and request.get('expected_stage') != plan['stage']:
+            raise StaleMigrationConfirmation('The migration stage changed. Use Check and confirm rollback again.')
         try:
             self._apply(state, rule, plan, request['stage'])
         except (OSError, RuntimeError, ValueError) as error:
@@ -104,7 +111,7 @@ class MigrationManager:
         if stage != 'rollback' and plan.get('exact_entries') is not True:
             raise ValueError('This plan predates exact saved-entry verification. Review a new diff or roll back the old plan.')
         if stage == 'rollback':
-            if plan['stage'] not in ('protected', 'retired', 'failed', 'retiring', 'rolling-back'):
+            if plan['stage'] not in ROLLBACK_STAGES:
                 raise ValueError('There is no applied migration to roll back.')
             if plan['stage'] == 'protected':
                 # Protect only recorded approval. No legacy settings or policies were changed.
@@ -121,7 +128,10 @@ class MigrationManager:
                 not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key)):
             raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
         self.kernel.protect_subset(rule['addresses'], state['kernel'], state['installation_id'])
+        if plan['stage'] == 'protected':
+            plan['pending_overlap'] = None
         plan['stage'] = 'retiring' if stage == 'retire' else 'rolling-back'
+        rule['migration_error'] = 'Migration is incomplete. Protection and the verified backup are retained. Use Check to review recovery.'
         self.store.save(state)  # Backups and transition intent survive a mid-update crash.
         try:
             for backup in plan['profiles']:
@@ -155,11 +165,17 @@ class MigrationManager:
     def _apply_legacy_changes(self, state: dict, plan: dict, stage: str) -> None:
         removed = plan.setdefault('removed_overlaps', {})
         overlaps = plan['overlaps']
+        self._resolve_pending_overlap(state, plan)
         if stage == 'retire':
+            def record_intent(binding):
+                plan['pending_overlap'] = {'index': index, 'binding': binding}
+                self.store.save(state)
+
             for index, item in enumerate(overlaps):
-                binding = self.kernel.change_legacy(item, 'del')
+                binding = self.kernel.change_legacy(item, 'del', before_delete=record_intent)
                 if binding is not None:
                     removed[str(index)] = binding
+                    plan['pending_overlap'] = None
                     self.store.save(state)
             return
         # Restore routes before the rules that can select them.
@@ -167,3 +183,18 @@ class MigrationManager:
             self.kernel.change_legacy(overlaps[int(index)], 'add', binding=removed[index])
             del removed[index]
             self.store.save(state)
+
+    def _resolve_pending_overlap(self, state: dict, plan: dict) -> None:
+        if 'pending_overlap' not in plan:
+            # Older journals lack an intent marker. An unrecorded, missing item is ambiguous.
+            for index, item in enumerate(plan['overlaps']):
+                if str(index) not in plan['removed_overlaps'] and not self.kernel.legacy_present(item):
+                    raise RuntimeError('The old migration journal cannot verify an absent legacy policy. Restore it through NetworkManager and retry rollback. Protection is retained.')
+        else:
+            pending = plan['pending_overlap']
+            if pending is None:
+                return
+            if not self.kernel.legacy_present(plan['overlaps'][pending['index']], binding=pending['binding']):
+                raise RuntimeError('The outcome of an interrupted kernel deletion is unknown. Restore the reviewed NetworkManager policy and retry rollback. Protection is retained.')
+        plan['pending_overlap'] = None
+        self.store.save(state)

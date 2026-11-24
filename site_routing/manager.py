@@ -8,6 +8,7 @@ from .planning import plan_rules, public_rule, visible_providers
 from .protocol import validate_request
 from .rule_operations import change_rule, owned_rule, restore_failed_removal
 from .models import Target
+from .migrations import StaleMigrationConfirmation
 from .reconciliation_log import TransitionLog
 from .reconciliation_status import apply_destination_failures, append_migration_details
 
@@ -46,6 +47,8 @@ class RoutingManager:
                     raise ValueError('Migration adapter is unavailable.')
                 try:
                     self.migrations.apply(state, rule, request['migration'])
+                except StaleMigrationConfirmation:
+                    raise
                 except (OSError, RuntimeError, ValueError) as error:
                     rule['status'] = 'apply-error'
                     rule['detail'] = f'Migration {request["migration"]["stage"]} did not complete: {error}'[:4096]

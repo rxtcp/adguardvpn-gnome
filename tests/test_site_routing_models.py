@@ -79,8 +79,11 @@ class SiteRoutingModelTests(unittest.TestCase):
         request = {'operation': 'update-rule', 'id': '00000000-0000-4000-8000-000000000002',
                    'domain': 'one.example', 'target': {'kind': 'direct', 'id': 'direct'}}
         self.assertNotIn('migration', validate_request(request))
-        for stage in ('protect', 'retire', 'rollback'):
+        for stage in ('protect', 'retire'):
             self.assertEqual(validate_request({**request, 'migration': {'id': request['id'], 'stage': stage}})['migration']['stage'], stage)
+        rollback = {'id': request['id'], 'stage': 'rollback'}
+        self.assertEqual(validate_request({**request, 'migration': {**rollback, 'expected_stage': 'protected'}})['migration']['expected_stage'], 'protected')
         for migration in (None, [], {}, {'id': request['id'], 'stage': 'shell'},
-                          {'id': request['id'], 'stage': 'protect', 'table': 880}, {'id': 'bad', 'stage': 'protect'}):
+                          {'id': request['id'], 'stage': 'protect', 'table': 880}, {'id': 'bad', 'stage': 'protect'},
+                          rollback, {**rollback, 'expected_stage': 'preview'}):
             with self.assertRaises(ValueError): validate_request({**request, 'migration': migration})

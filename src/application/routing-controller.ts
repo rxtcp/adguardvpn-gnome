@@ -83,7 +83,8 @@ export class RoutingController {
         if (this.closed || this.working || !await this.view.confirm('Confirm routing migration', `${explanation}\n\n${plan.changes.join('\n')}`))
             return;
         await this.work(() => this.client.change({operation: 'update-rule', id: rule.id, domain: rule.domain,
-            target: rule.target, migration: {id: plan.id, stage}}));
+            target: rule.target, migration: stage === 'rollback'
+                ? {id: plan.id, stage, expected_stage: plan.stage} : {id: plan.id, stage}}));
     }
 
     private async work(operation: () => Promise<void>): Promise<void> {

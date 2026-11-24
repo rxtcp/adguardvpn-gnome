@@ -8,6 +8,7 @@ import socket
 import struct
 import subprocess
 import unittest
+from unittest.mock import patch
 
 from site_routing.commands import CommandRunner, IP
 from site_routing.kernel import KernelBackend
@@ -39,6 +40,45 @@ class NamespaceRoutingTests(unittest.TestCase):
         self.command('-6', 'address', 'add', source6 + '/64', 'dev', name, 'nodad')
         index = socket.if_nametoindex(name)
         return NetworkPath(name, index, source4), NetworkPath(name, index, source6)
+
+    def test_legacy_route_restore_binds_to_index_even_if_the_name_is_reused_during_the_write(self):
+        self.command('link', 'set', 'lo', 'up')
+        original, original6 = self.tunnel()
+        runner = CommandRunner()
+        backend = KernelBackend(runner)
+        def legacy_routes(family):
+            return [row for row in runner.read_ip(family, 'route', 'show', 'table', 'all') if row.get('table') == 777]
+
+        for family, destination, path in ((4, '198.51.100.8/32', original), (6, '2001:db8::8/128', original6)):
+            self.command(f'-{family}', 'route', 'add', destination, 'table', '777',
+                         'dev', path.interface, 'src', path.source, 'proto', 'static', 'metric', '20')
+        row6 = legacy_routes(6)[0]
+        item6 = {'kind': 'route', 'family': 6, 'data': row6}
+        binding6 = backend.change_legacy(item6, 'del')
+        backend.change_legacy(item6, 'add', binding=binding6)
+        self.assertEqual(legacy_routes(6), [row6])
+
+        row4 = legacy_routes(4)[0]
+        item4 = {'kind': 'route', 'family': 4, 'data': row4}
+        binding4 = backend.change_legacy(item4, 'del')
+        restore = runner.restore_legacy_route
+
+        def reuse_name(item, index):
+            self.command('link', 'set', original.interface, 'down')
+            self.command('link', 'set', original.interface, 'name', 'fixtureverified')
+            self.command('link', 'set', 'fixtureverified', 'up')
+            replacement, _ = self.tunnel('192.0.2.7', '2001:db8:2::7', name=original.interface)
+            self.assertNotEqual(replacement.ifindex, index)
+            restore(item, index)
+
+        with patch.object(runner, 'restore_legacy_route', side_effect=reuse_name):
+            backend.change_legacy(item4, 'add', binding=binding4)
+        self.assertEqual(legacy_routes(4), [{**row4, 'dev': 'fixtureverified'}])
+
+        self.command('link', 'del', 'fixtureverified')
+        with self.assertRaisesRegex(RuntimeError, 'kernel refused'):
+            restore(item4, original.ifindex)
+        self.assertEqual(legacy_routes(4), [])
 
     def test_independent_conflict_and_real_device_loss_recover_without_releasing_known_ips(self):
         self.command('link', 'set', 'lo', 'up')

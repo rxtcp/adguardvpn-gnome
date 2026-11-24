@@ -124,8 +124,15 @@ class PolicyOwnershipTests(unittest.TestCase):
         entries = backend.overlaps(['198.51.100.8'], {'objects': []})
         self.assertEqual(entries, [{'kind': 'rule', 'family': 4, 'data': row}])
         item = entries[0]
-        self.assertEqual(backend.change_legacy(item, 'del'), {})
+        self.assertTrue(backend.legacy_present(item, binding={}))
+        def record_intent(binding):
+            self.assertEqual(binding, {})
+            self.assertIn(row, runner.current[4]['rule'])
+        callback = Mock(side_effect=record_intent)
+        self.assertEqual(backend.change_legacy(item, 'del', before_delete=callback), {})
+        callback.assert_called_once_with({})
         self.assertIsNone(backend.change_legacy(item, 'del'))
+        self.assertFalse(backend.legacy_present(item))
         self.assertNotIn(row, runner.current[4]['rule'])
         backend.change_legacy(item, 'add'); backend.change_legacy(item, 'add')
         self.assertEqual(runner.current[4]['rule'].count(row), 1)
@@ -140,6 +147,9 @@ class PolicyOwnershipTests(unittest.TestCase):
         runner.read_links = Mock(return_value=[{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex}])
         with patch('site_routing.kernel.BOOT_ID_PATH') as boot_id:
             boot_id.read_text.return_value = 'original boot\n'
+            self.assertTrue(backend.legacy_present(item))
+            self.assertTrue(backend.legacy_present(item, binding={'ifindex': PATH4.ifindex, 'boot_id': 'original boot'}))
+            self.assertFalse(backend.legacy_present(item, binding={'ifindex': PATH4.ifindex + 1, 'boot_id': 'original boot'}))
             binding = backend.change_legacy(item, 'del')
             self.assertNotIn(row, runner.current[4]['route'])
 
@@ -159,8 +169,11 @@ class PolicyOwnershipTests(unittest.TestCase):
             self.assertFalse(runner.current[4]['route'])
 
             boot_id.read_text.return_value = 'original boot\n'
+            runner.restore_legacy_route = Mock()
+            runner.events.clear()
             backend.change_legacy(item, 'add', binding=binding)
-            self.assertIn(row, runner.current[4]['route'])
+            runner.restore_legacy_route.assert_called_once_with(item, PATH4.ifindex)
+            self.assertEqual(runner.events, [])
 
 
 class LegacyArgumentTests(unittest.TestCase):

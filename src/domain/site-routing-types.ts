@@ -44,10 +44,12 @@ export interface ObservedRoute {
     type?: string;
 }
 export type MigrationStage = 'protect' | 'retire' | 'rollback';
+type MigrationRequest = {id: string} & (
+    {stage: 'protect' | 'retire'} | {stage: 'rollback'; expected_stage: string});
 export type RoutingMutation =
     | {operation: 'add-rule'; domain: string; target: RoutingTarget}
     | {operation: 'update-rule'; id: string; domain: string; target: RoutingTarget;
-        migration?: {id: string; stage: MigrationStage}}
+        migration?: MigrationRequest}
     | {operation: 'remove-rule'; id: string};
 export type RoutingRequest = RoutingMutation |
     {operation: 'list-providers' | 'list-rules'} | {operation: 'diagnose-rule'; id: string};

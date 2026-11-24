@@ -182,14 +182,18 @@ An overlapping destination policy blocks application and requires review.
    After retirement has started, rollback restores the backed-up NetworkManager
    profile settings if the current settings match the before or after snapshot.
    It replays only kernel deletions the service successfully recorded before
-   removing the replacement. A removed route also requires the original kernel
-   interface index and boot ID. If the interface changed, review the live
+   removing the replacement. A removed route also requires the original boot ID
+   and interface index, which the service passes directly to the kernel. If the
+   interface changed, review the live
    NetworkManager connection and restore its policies before explicitly removing
    the Site Routing rule. The daemon leaves protection in place on refusal.
 
-If a previous release or a crash left a kernel deletion without a record,
-recover that entry through the restored NetworkManager profile. Automatic
-rollback only replays recorded deletions.
+The service saves its intent before each kernel deletion and records completion
+after the kernel accepts it. If a crash or an older journal leaves the outcome
+uncertain, protection stays in place. Restore the exact policy through the
+recovered NetworkManager profile, use **Check**, and confirm rollback again.
+The confirmation applies to the stage shown in **Check**. If another client
+moves the migration to a different stage, use **Check** again before confirming.
 
 Retirement and rollback check the profile version during the write. If
 NetworkManager reports a concurrent edit or cannot provide a usable version,
@@ -222,7 +226,8 @@ before sharing. See [the synchronized capture plan](vpn-underlay-prerequisite.md
 ## Update
 
 Update the checkout, rebuild/reinstall the extension and rerun
-`sudo ./scripts/install-site-routing.sh`. The routing installer preserves the
+`sudo ./scripts/install-site-routing.sh`. Update both components to send and
+verify the migration stage in rollback confirmations. The routing installer preserves the
 private journal and starts the guard if needed. It keeps an active guard
 running while the manager restores known-address protection on startup. AdGuard
 authentication remains a separate helper procedure.

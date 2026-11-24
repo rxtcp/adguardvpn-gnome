@@ -2,6 +2,8 @@
 import json
 import subprocess
 
+from .route_netlink import restore_legacy_route
+
 IP = '/usr/sbin/ip'
 NFT = '/usr/sbin/nft'
 ENVIRONMENT = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
@@ -26,6 +28,8 @@ def failure_reason(stderr: str) -> str:
 
 
 class CommandRunner:
+    restore_legacy_route = staticmethod(restore_legacy_route)
+
     def run(self, argv: list[str], input_text: str | None = None) -> str:
         try:
             result = subprocess.run(argv, input=input_text, stdin=None if input_text is not None else subprocess.DEVNULL,

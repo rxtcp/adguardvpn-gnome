@@ -98,7 +98,8 @@ test('Check offers rollback for a retained migration when the fresh diff cannot 
     assert.match(confirmation.body, /leaves the legacy NetworkManager settings and policies as they are/);
     confirmation.emit('response', 'confirm');
     await app.settle();
-    assert.deepEqual(app.dbusCalls.find(call => call.request.migration)?.request.migration, {id, stage: 'rollback'});
+    assert.deepEqual(app.dbusCalls.find(call => call.request.migration)?.request.migration,
+        {id, stage: 'rollback', expected_stage: 'protected'});
     window.emit('close-request');
 });
 

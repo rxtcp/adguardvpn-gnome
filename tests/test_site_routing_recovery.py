@@ -165,6 +165,12 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.assertEqual(profile['settings']['ipv4']['routing-rules'], [])
         self.assertNotIn(legacy, self.runner.current[4]['rule'])
         self.assertEqual(set(self.statuses().values()), {'active'})
+        before = self.store.load()
+        request['migration'] = {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'protected'}
+        with self.assertRaisesRegex(ValueError, 'stage changed.*Check'):
+            self.manager.handle(request, 1000, 'fixtureuser')
+        self.assertEqual(self.store.load(), before)
+        self.assertNotIn(legacy, self.runner.current[4]['rule'])
 
     def test_protected_rollback_never_adds_a_route_to_a_tunnel_that_reused_the_name(self):
         legacy = {'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static',
@@ -193,7 +199,7 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.assertEqual(diagnosis['migration']['stage'], 'protected')
         self.runner.events.clear()
 
-        request['migration']['stage'] = 'rollback'
+        request['migration'] = {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'protected'}
         self.manager.handle(request, 1000, 'fixtureuser')
         self.assertEqual(self.manager.rules(1000), [])
         self.assertEqual(self.store.state['kernel']['known'], [])
