@@ -19,7 +19,8 @@ def paths_from_active(active: dict, links: list[dict], tunnel: bool = True) -> d
             kind = link.get('linkinfo', {}).get('info_kind', '')
             if 'UP' not in link.get('flags', []) or link.get('operstate') == 'DOWN':
                 continue
-            if tunnel and kind not in TUNNEL_KINDS and 'POINTOPOINT' not in link.get('flags', []):
+            if tunnel and (link['ifindex'] not in active.get('tunnel_indices', {}).get(family, ()) or
+                           (kind not in TUNNEL_KINDS and 'POINTOPOINT' not in link.get('flags', []))):
                 continue
             if not tunnel and (link['ifname'] not in active.get('interfaces', []) or kind in TUNNEL_KINDS):
                 continue
@@ -62,10 +63,13 @@ class ProviderRegistry:
             if profile['type'] not in ('vpn', 'wireguard'):
                 continue
             target = Target.parse({'kind': 'networkmanager', 'id': profile['uuid']})
-            current = next((row for row in active if row.get('uuid') == target.id), {})
+            activations = [row for row in active if row.get('uuid') == target.id]
+            current = activations[0] if len(activations) == 1 else {}
             paths = paths_from_active(current, links)
             detail = 'Kernel tunnel and source addresses found; destination routing is verified separately.'
-            if not paths:
+            if len(activations) > 1:
+                detail = 'Multiple current activations match this NetworkManager profile.'
+            elif not paths:
                 detail = ('NetworkManager reports activated, but no verified kernel tunnel/IP configuration is available.'
                           if current.get('state') == 2 else 'NetworkManager VPN is disconnected or not yet activated.')
             allowed = None
@@ -85,6 +89,7 @@ class ProviderRegistry:
             target = Target('adguard', 'adguardvpn-gnome')
             service_links = [link for link in links if link['ifname'] in adguard.get('interfaces', [])]
             current = {'state': 2 if adguard.get('connected') else 0,
+                       'tunnel_indices': {family: [link['ifindex'] for link in service_links] for family in (4, 6)},
                        **{f'ip{family}': {'AddressData': [{'address': entry['local']} for link in service_links for entry in link.get('addr_info', []) if entry.get('local') and ipaddress.ip_address(entry['local']).version == family]} for family in (4, 6)}}
             result[target.key] = Provider(target, 'AdGuard VPN (protected)', paths_from_active(current, service_links))
         return result

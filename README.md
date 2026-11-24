@@ -134,9 +134,13 @@ policies require an exact diff, private backup and separate migration approvals.
 
 An ordinary legacy conflict or a destination write failure blocks the affected
 IPs while independently verified rules continue. Tunnel recreation is retried
-automatically. **Check** reconciles approved routes and shows a timestamp,
+automatically once NetworkManager confirms the replacement interface. **Check**
+reconciles approved routes and shows a timestamp,
 provider reason and the last migration refusal. Legacy retirement always
-rechecks the replacement rather than trusting an earlier `active` label.
+rechecks the replacement and requires exact live matches for the saved entries.
+
+Rerunning the Site Routing installer restores known-address protection through
+the manager while keeping the early guard and NetworkManager running.
 
 Installation, updating, errors, migration and rollback are described in
 [docs/site-routing.md](docs/site-routing.md). The
@@ -172,7 +176,8 @@ This removes only owned routing/firewall objects and system integration; it
 does not restore previously retired manual NM entries. Use the UI rollback
 first if needed. A cleanup failure retains guards and service files and stops
 uninstallation. Follow the reported recovery instructions before continuing.
-Private state/backups at `/var/lib/adguardvpn-site-routing` are retained.
+The uninstaller removes and reloads the NetworkManager drop-in before stopping
+the early guard. Private state/backups at `/var/lib/adguardvpn-site-routing` are retained.
 See [the full removal procedure](docs/site-routing.md#uninstall-and-retained-data).
 
 ### Remove both the extension and passwordless helper

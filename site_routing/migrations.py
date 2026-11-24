@@ -3,7 +3,7 @@ import uuid
 import json
 
 from .migration_fields import settings_hash, settings_removals
-from .migration_matching import matches_profile
+from .migration_matching import matches_entry
 from .models import Target
 
 
@@ -19,14 +19,22 @@ class MigrationManager:
         existing = [plan for plan in state['migrations'].values() if plan['rule_id'] == rule['id'] and plan['stage'] not in ('preview', 'rolled-back')]
         if existing:
             return public_plan(existing[-1])
-        profiles, changes, candidates = [], [], []
+        profiles, changes, matched = [], [], {}
+        overlaps = self.kernel.overlaps(rule['addresses'], state['kernel'])
         for profile in self.reader.migration_profiles():
             if profile['users'] and rule['owner_name'] not in profile['users']:
                 continue
             patches = settings_removals(profile['settings'], rule['addresses'])
             if not patches:
                 continue
-            candidates.append(profile)
+            for patch in patches:
+                setting, field = patch['setting'], patch['field']
+                for index in patch['indices']:
+                    row = profile['settings'][setting][field][index]
+                    matches = [i for i, item in enumerate(overlaps) if setting == f'ipv{item["family"]}'
+                               and matches_entry(item, profile, field, row)]
+                    if len(matches) != 1 or matched.setdefault(matches[0], profile['uuid']) != profile['uuid']:
+                        raise ValueError('A saved policy entry cannot be matched exactly to a live NM policy; no automatic deletion is allowed.')
             after, after_settings = self.reader.render_without(profile['serialized'], patches)
             profiles.append({'uuid': profile['uuid'], 'before': profile['serialized'], 'after': after,
                              'addresses': sorted({address for patch in patches for address in patch['addresses']}),
@@ -34,23 +42,22 @@ class MigrationManager:
             changes += [f'{profile["name"]} ({profile["uuid"]}): remove {patch["setting"]}.{patch["field"]}[{index}] '
                         + json.dumps(profile['settings'][patch['setting']][patch['field']][index], sort_keys=True, default=list)
                         for patch in patches for index in patch['indices']]
-        overlaps = self.kernel.overlaps(rule['addresses'], state['kernel'])
         if not profiles:
             return None
-        if any(not any(matches_profile(item, profile) for profile in candidates) for item in overlaps):
+        if len(matched) != len(overlaps):
             raise ValueError('Some overlapping policies cannot be matched exactly to NM settings; no automatic deletion is allowed.')
         identity = str(uuid.uuid4())
         state['migrations'] = {key: plan for key, plan in state['migrations'].items() if plan['rule_id'] != rule['id'] or plan['stage'] != 'preview'}
         plan = {'id': identity, 'rule_id': rule['id'], 'owner_uid': rule['owner_uid'],
                 'target': rule['target'], 'stage': 'preview', 'profiles': profiles,
-                'overlaps': overlaps, 'changes': changes}
+                'overlaps': overlaps, 'changes': changes, 'exact_entries': True}
         state['migrations'][identity] = plan
         return public_plan(plan)
 
     def approved(self, state: dict) -> list[dict]:
         rules = {rule['id']: rule for rule in state['rules']}
         return [item for plan in state['migrations'].values()
-                if plan['stage'] in ('protected', 'retiring', 'retired', 'failed')
+                if plan.get('exact_entries') is True and plan['stage'] in ('protected', 'retiring', 'retired', 'failed')
                 and (rule := rules.get(plan['rule_id'])) is not None
                 and rule['owner_uid'] == plan['owner_uid'] and rule['target'] == plan['target']
                 for item in plan['overlaps']]
@@ -74,6 +81,8 @@ class MigrationManager:
         plan.pop('last_error', None)
 
     def _apply(self, state: dict, rule: dict, plan: dict, stage: str) -> None:
+        if stage != 'rollback' and plan.get('exact_entries') is not True:
+            raise ValueError('This plan predates exact saved-entry verification. Review a new diff or roll back the old plan.')
         profiles = self._profiles(plan)
         target_key = Target.parse(rule['target']).key
         if stage == 'protect':

@@ -26,6 +26,13 @@ def settings_variant():
 
 
 class NativeBusTests(unittest.TestCase):
+    def test_unusable_profile_versions_refuse_migration(self):
+        class Connection:
+            def call_sync(self, *_args):
+                return GLib.Variant('(v)', (GLib.Variant('t', 0),))
+        with self.assertRaisesRegex(RuntimeError, 'usable profile version'):
+            SystemBus(Gio, GLib, Connection()).profile_version(':1.27', '/profile')
+
     def test_variant_patch_preserves_signatures_and_every_untouched_setting(self):
         before = settings_variant()
         serialized, after = remove_entries(GLib, before.print_(True), [
@@ -53,47 +60,96 @@ class NativeBusTests(unittest.TestCase):
         self.assertEqual(bus.properties('fixture', '/fixture', 'fixture')['State'], 2)
         settings, serialized = bus.settings('/fixture')
         self.assertEqual(settings['connection']['uuid'], NM_ID)
-        bus.update_settings('/fixture', serialized)
+        bus.update_settings('/fixture', serialized, owner=':1.27', version=21)
         self.assertEqual(connection.calls[-1][4].get_type_string(), '(a{sa{sv}}ua{sv})')
+        self.assertEqual(connection.calls[-1][4].get_child_value(2).lookup_value('version-id', None).get_type_string(), 't')
         self.assertNotIn('GetSecrets', [call[3] for call in connection.calls])
         connection.error = True
         with self.assertRaisesRegex(RuntimeError, 'unavailable'):
             bus.call('fixture', '/fixture', 'fixture', 'GetAll')
         with self.assertRaisesRegex(RuntimeError, 'rejected'):
-            bus.update_settings('/fixture', serialized)
+            bus.update_settings('/fixture', serialized, owner=':1.27', version=21)
 
 
 class NetworkManagerAdapterTests(unittest.TestCase):
+    def test_profile_write_refuses_a_concurrent_edit_and_uses_the_snapshotted_version(self):
+        class Connection:
+            def __init__(self):
+                self.profile = settings_variant()
+                self.version = 21
+                self.updated = None
+
+            def call_sync(self, destination, path, interface, method, parameters, *_args):
+                if method == 'GetNameOwner':
+                    return GLib.Variant('(s)', (':1.27',))
+                if method == 'Get':
+                    return GLib.Variant('(v)', (GLib.Variant('t', self.version),))
+                if method == 'GetSettings':
+                    return GLib.Variant.new_tuple(self.profile)
+                # An edit arrives after the caller's final read but before Update2.
+                self.version += 1
+                settings = {key: self.profile.lookup_value(key, None).unpack() for key in ('connection',)}
+                settings['connection']['id'] = 'Concurrent rename'
+                self.name = settings['connection']['id']
+                self.updated = (destination, parameters.unpack()[2])
+                if self.updated[1].get('version-id') != self.version:
+                    raise GLib.Error('version mismatch')
+                self.name = 'Overwritten'
+                return GLib.Variant('()', ())
+
+        connection = Connection()
+        bus = SystemBus(Gio, GLib, connection)
+        reader = NetworkManagerReader(bus, None)
+        version = connection.profile.print_(True)
+        profile = {'path': '/profile', 'uuid': NM_ID, 'settings': connection.profile.unpack()}
+        with self.assertRaisesRegex(RuntimeError, 'rejected'):
+            reader.update(profile, version)
+        self.assertEqual(connection.updated, (':1.27', {'version-id': 21}))
+        self.assertEqual(connection.name, 'Concurrent rename')
+
     def setUp(self):
         class Bus:
             glib = GLib
-            def __init__(self): self.count, self.broken, self.updated = 1, False, None
+            def __init__(self):
+                self.count, self.broken, self.updated, self.owner = 1, False, None, ':1.27'
+                self.manager = {'ActiveConnections': ['/active', '/physical'], 'Devices': ['/device', '/tun']}
+                self.active = {'Uuid': NM_ID, 'Id': 'Fixture VPN', 'Type': 'vpn', 'State': 2,
+                               'Devices': ['/device'], 'Ip4Config': '/ip4', 'Ip6Config': '/'}
+                self.physical = {'Uuid': 'uplink', 'Id': 'Fixture uplink', 'Type': '802-3-ethernet', 'State': 2,
+                                 'Devices': ['/device'], 'Ip4Config': '/uplink-ip4'}
+                self.tunnel = {'IpInterface': 'fixturevpn', 'Ip4Config': '/ip4', 'ActiveConnection': '/'}
+            def networkmanager_owner(self): return self.owner
+            def profile_version(self, owner, path): return 21
             def call(self, *args): return (['/profile'] * self.count,)
-            def settings(self, path):
+            def settings(self, path, *, owner):
                 value = settings_variant()
                 return value.unpack(), value.print_(True)
             def properties(self, destination, path, interface):
                 if self.broken: raise RuntimeError('NM restarting')
-                if path.endswith('NetworkManager'): return {'ActiveConnections': ['/active']}
-                if path == '/active': return {'Uuid': NM_ID, 'Id': 'Fixture VPN', 'Type': 'vpn', 'State': 2,
-                    'Devices': ['/device'], 'Ip4Config': '/ip4', 'Ip6Config': '/'}
-                if path == '/device': return {'IpInterface': 'fixturevpn', 'Interface': 'fixturewan'}
-                return {'AddressData': [{'address': '192.0.2.2'}]}
-            def update_settings(self, path, serialized): self.updated = path, serialized
+                return {'/org/freedesktop/NetworkManager': self.manager, '/active': self.active, '/physical': self.physical,
+                         '/device': {'Interface': 'fixturewan', 'Ip4Config': '/uplink-ip4', 'ActiveConnection': '/physical'},
+                         '/tun': self.tunnel, '/ip4': {'AddressData': [{'address': '192.0.2.2'}]},
+                         '/ip4-new': {'AddressData': [{'address': '192.0.2.2'}]},
+                         '/uplink-ip4': {'AddressData': [{'address': '192.0.2.3'}]}}[path]
+            def update_settings(self, path, serialized, *, owner, version):
+                self.updated = path, serialized, owner, version
         self.bus = Bus()
-        self.reader = NetworkManagerReader(self.bus, SimpleNamespace(read_links=lambda: [{'ifname': 'fixturevpn'}]))
+        self.links = [{'ifname': 'fixturevpn', 'ifindex': 17}, {'ifname': 'fixturewan', 'ifindex': 4}]
+        self.reader = NetworkManagerReader(self.bus, SimpleNamespace(read_links=lambda: self.links))
 
     def test_saved_profiles_permissions_and_active_ip_configurations_are_read_without_activation(self):
         snapshot = self.reader.snapshot()
         self.assertEqual(snapshot['profiles'][0]['users'], ('fixtureuser',))
         self.assertEqual(snapshot['active'][0]['interfaces'], ['fixturevpn'])
+        self.assertEqual(snapshot['active'][0]['tunnel_indices'], {4: (17,)})
+        self.assertEqual(snapshot['active'][1]['interfaces'], ['fixturewan'])
         self.assertEqual(snapshot['active'][0]['ip6'], {})
         self.assertEqual(snapshot['active'][0]['ip4']['AddressData'][0]['address'], '192.0.2.2')
         self.assertEqual(self.reader.migration_profiles()[0]['interfaces'], ['fixturevpn'])
         profile = snapshot['profiles'][0]
         serialized, settings = self.reader.render_without(profile['serialized'], [{'setting': 'ipv4', 'field': 'route-data', 'indices': [0]}])
         self.reader.update(profile, serialized)
-        self.assertEqual(self.bus.updated, ('/profile', serialized))
+        self.assertEqual(self.bus.updated, ('/profile', serialized, ':1.27', 21))
         self.assertEqual(len(settings['ipv4']['route-data']), 1)
 
     def test_restart_and_oversized_registry_do_not_create_fake_active_providers(self):
@@ -101,6 +157,41 @@ class NetworkManagerAdapterTests(unittest.TestCase):
         self.assertEqual(self.reader.snapshot()['active'], [])
         self.bus.count = 1025
         with self.assertRaises(RuntimeError): self.reader.profiles()
+
+    def test_nm_object_binding_refuses_base_device_same_name_reuse_and_ambiguous_claims(self):
+        def binding():
+            return self.reader.snapshot()['active'][0]['tunnel_indices']
+
+        self.assertEqual(binding(), {4: (17,)})
+        self.links[0]['ifindex'] = 27
+        self.assertEqual(binding(), {})
+        self.bus.active['Ip4Config'] = '/ip4-new'
+        self.assertEqual(binding(), {})
+        self.bus.tunnel['Ip4Config'] = '/ip4-new'
+        self.assertEqual(binding(), {4: (27,)})
+        self.bus.active['Devices'] = ['/tun']
+        self.assertEqual(binding(), {})
+        self.bus.active['Type'] = 'wireguard'
+        self.assertEqual(binding(), {})
+        self.bus.tunnel['ActiveConnection'] = '/active'
+        self.assertEqual(binding(), {4: (27,)})
+        self.bus.physical.update({**self.bus.active, 'Uuid': 'other'})
+        self.assertEqual(binding(), {})
+        self.bus.physical['State'] = 1
+        self.links[0]['ifindex'] = 37
+        self.bus.owner = ':1.28'
+        self.assertEqual(binding(), {4: (37,)})
+        self.bus.manager['Devices'] *= 513
+        self.assertEqual(self.reader.snapshot()['active'], [])
+
+    def test_race_during_the_profile_read_never_sends_update2(self):
+        profile = self.reader.profiles()[0]
+        with patch.object(self.bus, 'profile_version', side_effect=[21, 22]):
+            with self.assertRaisesRegex(RuntimeError, 'overwrite was refused'):
+                self.reader.update(profile, 'irrelevant')
+        with self.assertRaisesRegex(RuntimeError, 'overwrite was refused'):
+            self.reader.update({**profile, 'settings': {}}, 'irrelevant')
+        self.assertIsNone(self.bus.updated)
 
 
 class ProtectedAdguardAdapterTests(unittest.TestCase):

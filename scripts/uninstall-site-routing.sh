@@ -50,10 +50,11 @@ elif ! /usr/bin/python3 -I -B "$protected_dir/launch.py" check-empty; then
 fi
 
 /usr/bin/systemctl disable adguardvpn-site-routing.service adguardvpn-site-routing-guard.service
+/usr/bin/rm -f -- "$dropin_dir/10-adguardvpn-site-routing.conf"
+/usr/bin/systemctl daemon-reload
 /usr/bin/systemctl stop adguardvpn-site-routing-guard.service
 /usr/bin/rm -f -- /etc/systemd/system/adguardvpn-site-routing.service \
     /etc/systemd/system/adguardvpn-site-routing-guard.service \
-    "$dropin_dir/10-adguardvpn-site-routing.conf" \
     /usr/share/dbus-1/system.d/org.gnome.AdGuardVPN.SiteRouting.conf \
     /usr/share/dbus-1/system-services/org.gnome.AdGuardVPN.SiteRouting.service \
     /usr/share/polkit-1/actions/org.gnome.adguardvpn.site-routing.policy

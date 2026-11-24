@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RoutingInstallationTests(unittest.TestCase):
+    def test_update_does_not_restart_the_required_guard_unit(self):
+        installer = (ROOT / 'scripts/install-site-routing.sh').read_text()
+        self.assertNotIn('systemctl restart adguardvpn-site-routing-guard.service', installer)
+        self.assertLess(installer.index('systemctl start adguardvpn-site-routing-guard.service'),
+                        installer.index('systemctl start adguardvpn-site-routing.service'))
+
     def test_polkit_changes_require_interactive_admin_authentication_not_passwordless_vpn_action(self):
         policy = ET.parse(ROOT / 'routing_system/org.gnome.adguardvpn.site-routing.policy')
         actions = {element.attrib['id']: element for element in policy.findall('action')}

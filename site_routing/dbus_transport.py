@@ -30,15 +30,27 @@ class SystemBus:
     def properties(self, destination, path, interface):
         return self.call(destination, path, 'org.freedesktop.DBus.Properties', 'GetAll', '(s)', (interface,))[0]
 
-    def settings(self, path):
-        value = self.raw(NM, path, CONNECTION_IFACE, 'GetSettings').get_child_value(0)
+    def networkmanager_owner(self) -> str:
+        return self.call('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                         'GetNameOwner', '(s)', (NM,))[0]
+
+    def profile_version(self, owner: str, path: str) -> int:
+        version = self.call(owner, path, 'org.freedesktop.DBus.Properties', 'Get', '(ss)',
+                            (CONNECTION_IFACE, 'VersionId'))[0]
+        if type(version) is not int or not 1 <= version < 2**64:
+            raise RuntimeError('NetworkManager did not provide a usable profile version; migration was refused.')
+        return version
+
+    def settings(self, path, *, owner=NM):
+        value = self.raw(owner, path, CONNECTION_IFACE, 'GetSettings').get_child_value(0)
         return value.unpack(), value.print_(True)
 
-    def update_settings(self, path, serialized):
+    def update_settings(self, path, serialized, *, owner, version):
         value = self.glib.Variant.parse(self.glib.VariantType.new('a{sa{sv}}'), serialized, None, None)
-        parameters = self.glib.Variant.new_tuple(value, self.glib.Variant('u', 1), self.glib.Variant('a{sv}', {}))
+        options = self.glib.Variant('a{sv}', {'version-id': self.glib.Variant('t', version)})
+        parameters = self.glib.Variant.new_tuple(value, self.glib.Variant('u', 1), options)
         try:
-            self.connection.call_sync(NM, path, CONNECTION_IFACE, 'Update2', parameters, None,
+            self.connection.call_sync(owner, path, CONNECTION_IFACE, 'Update2', parameters, None,
                                       self.gio.DBusCallFlags.NONE, 5000, None)
         except self.glib.Error as error:
-            raise RuntimeError('NetworkManager rejected the confirmed migration update.') from error
+            raise RuntimeError('NetworkManager rejected the confirmed migration update; review the current profile.') from error

@@ -5,7 +5,13 @@ import struct
 import unittest
 
 from site_routing.migration_fields import entry_address, settings_hash
-from site_routing.migration_matching import matches_profile
+from site_routing.migration_matching import matches_entry
+
+
+def matches_profile(live, profile):
+    setting = profile['settings'][f'ipv{live["family"]}']
+    return any(matches_entry(live, profile, field, row) for field, rows in setting.items()
+               if field in ('routing-rules', 'route-data', 'routes') for row in rows)
 
 
 class MigrationMatchingTests(unittest.TestCase):
@@ -25,9 +31,12 @@ class MigrationMatchingTests(unittest.TestCase):
         row = {'to': '198.51.100.8', 'to-len': 32, 'table': 777, 'priority': 900}
         profile = {'settings': {'ipv4': {'routing-rules': [row]}}}
         self.assertTrue(matches_profile(live, profile))
-        for changed in ({'to': '198.51.100.9'}, {'priority': 901}, {'table': 778}, {'from': '192.0.2.1'}, {'fwmark': 1}):
+        for changed in ({'to': '198.51.100.9'}, {'priority': 901}, {'table': 778}, {'from': '192.0.2.1'}, {'fwmark': 1},
+                        {'family': socket.AF_INET6}, {'to': '198.51.100.8/32', 'to-len': 31},
+                        {'from-len': 8}, {'action': 7}):
             self.assertFalse(matches_profile(live, {'settings': {'ipv4': {'routing-rules': [{**row, **changed}]}}}))
         self.assertFalse(matches_profile({**live, 'data': {**live['data'], 'protocol': 99}}, profile))
+        self.assertFalse(matches_profile({**live, 'data': {**live['data'], 'dst': '198.51.100.8/31'}}, profile))
 
     def test_route_matching_checks_interface_gateway_source_metric_table_and_legacy_arrays(self):
         live = {'kind': 'route', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'table': 777,
@@ -36,12 +45,17 @@ class MigrationMatchingTests(unittest.TestCase):
         profile = {'interfaces': ['fixturevpn'], 'settings': {'ipv4': {'route-data': [row]}}}
         self.assertTrue(matches_profile(live, profile))
         self.assertFalse(matches_profile(live, {**profile, 'interfaces': ['other']}))
-        for changed in ({'table': 778}, {'next-hop': '192.0.2.9'}, {'metric': 21}, {'src': '192.0.2.3'}):
+        for changed in ({'table': 778}, {'next-hop': '192.0.2.9'}, {'metric': 21}, {'src': '192.0.2.3'},
+                        {'type': 'blackhole'}, {'onlink': True}):
             self.assertFalse(matches_profile(live, {**profile, 'settings': {'ipv4': {'route-data': [{**row, **changed}]}}}))
+        for changed in ({'scope': 'host'}, {'pref': 'low'}):
+            self.assertFalse(matches_profile({**live, 'data': {**live['data'], **changed}}, profile))
         packed = lambda address: struct.unpack('=I', socket.inet_pton(socket.AF_INET, address))[0]
         old = {'settings': {'connection': {'interface-name': 'fixturevpn'}, 'ipv4': {'route-table': 777,
             'routes': [[packed('198.51.100.8'), 32, packed('192.0.2.1'), 20]]}}}
         self.assertTrue(matches_profile(live, old))
+        for row in ([packed('198.51.100.8'), 32], [packed('198.51.100.8'), 32, 'bad', 20]):
+            self.assertFalse(matches_profile(live, {**old, 'settings': {**old['settings'], 'ipv4': {'routes': [row]}}}))
         live6 = {'kind': 'route', 'family': 6, 'data': {'dst': '2001:db8::8/128', 'dev': 'fixturevpn', 'protocol': 'static'}}
         old6 = {'interfaces': ['fixturevpn'], 'settings': {'ipv6': {'routes': [[list(ipaddress.IPv6Address('2001:db8::8').packed), 128, [0] * 16, 0]]}}}
         self.assertTrue(matches_profile(live6, old6))

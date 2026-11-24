@@ -14,7 +14,7 @@ class MigrationTests(unittest.TestCase):
                      'target': TARGET, 'addresses': ['198.51.100.8'], 'status': 'active'}
         self.state = self.store.state
         self.state['rules'] = [self.rule]
-        self.profile = {'uuid': NM_ID, 'name': 'Fixture VPN', 'path': '/fixture/profile', 'users': (),
+        self.profile = {'uuid': NM_ID, 'name': 'Fixture VPN', 'path': '/fixture/profile', 'users': (), 'interfaces': ['fixturevpn'],
                         'settings': {'connection': {'id': 'Fixture VPN', 'uuid': NM_ID},
                                      'ipv4': {'route-data': [{'dest': '198.51.100.8', 'prefix': 32},
                                                              {'dest': '203.0.113.0', 'prefix': 24}],
@@ -34,8 +34,10 @@ class MigrationTests(unittest.TestCase):
                 current['serialized'], current['settings'] = serialized, json.loads(serialized)
         class Kernel:
             def __init__(self): self.events = []
-            def overlaps(self, addresses, journal): return [{'kind': 'rule', 'family': 4,
-                'data': {'priority': 900, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}}]
+            def overlaps(self, addresses, journal):
+                return [{'kind': 'rule', 'family': 4, 'data': {
+                    'priority': 900, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}},
+                    {'kind': 'route', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'dev': 'fixturevpn', 'protocol': 'static'}}]
             def block(self, addresses, installation): self.events.append('block')
             def protect_subset(self, addresses, journal, installation): self.events.append('block')
             def verify_replacement(self, addresses, journal, target_key): return True
@@ -59,7 +61,7 @@ class MigrationTests(unittest.TestCase):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
         self.assertEqual(self.profile['settings'], original)
-        self.assertEqual(len(self.manager.approved(self.state)), 1)
+        self.assertEqual(len(self.manager.approved(self.state)), 2)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         self.assertEqual(self.kernel.events, ['block', 'del'])
         self.assertEqual(self.profile['settings']['ipv4']['route-data'], [{'dest': '203.0.113.0', 'prefix': 24}])
@@ -102,6 +104,39 @@ class MigrationTests(unittest.TestCase):
         patches = settings_removals(self.profile['settings'], ['198.51.100.8'])
         self.assertEqual(len(patches), 2)
         self.assertEqual(patches[0]['indices'], [0])
+
+    def test_preview_refuses_an_unmatched_saved_selector_even_with_a_live_match_for_the_same_ip(self):
+        settings = self.profile['settings']
+        settings['ipv4']['routing-rules'].append({
+            'to': '198.51.100.8/32', 'from': '192.0.2.5', 'from-len': 32, 'table': 777, 'priority': 901})
+        self.profile['serialized'] = json.dumps(settings)
+        with self.assertRaisesRegex(ValueError, 'matched exactly'):
+            self.manager.preview(self.state, self.rule)
+        self.assertFalse(self.state['migrations'])
+        self.assertFalse(self.kernel.events)
+
+    def test_preview_refuses_ambiguous_profile_ownership_and_foreign_overlaps(self):
+        other_profile = {**self.profile, 'uuid': '00000000-0000-4000-8000-000000000003'}
+        with patch.object(self.reader, 'migration_profiles', return_value=[self.profile, other_profile]):
+            with self.assertRaisesRegex(ValueError, 'matched exactly'):
+                self.manager.preview(self.state, self.rule)
+        extra = {'kind': 'rule', 'family': 4, 'data': {
+            'priority': 901, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}}
+        with patch.object(self.kernel, 'overlaps', return_value=[*self.kernel.overlaps([], {}), extra]):
+            with self.assertRaisesRegex(ValueError, 'matched exactly'):
+                self.manager.preview(self.state, self.rule)
+
+    def test_preexisting_unverified_plan_cannot_authorize_or_retire_but_can_roll_back(self):
+        plan = self.manager.preview(self.state, self.rule)
+        saved = self.state['migrations'][plan['id']]
+        del saved['exact_entries']
+        saved['stage'] = 'protected'
+        self.assertEqual(self.manager.approved(self.state), [])
+        for stage in ('protect', 'retire'):
+            with self.assertRaisesRegex(ValueError, 'predates'):
+                self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': stage})
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
+        self.assertEqual(saved['stage'], 'rolled-back')
 
     def test_modern_nm_rule_uses_separate_to_length_and_diff_contains_exact_fields(self):
         self.profile['settings']['ipv4']['routing-rules'] = [{'to': '198.51.100.8', 'to-len': 32, 'table': 777, 'priority': 900}]

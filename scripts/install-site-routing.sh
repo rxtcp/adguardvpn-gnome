@@ -69,7 +69,8 @@ done
 /usr/bin/install -o 0 -g 0 -m 0644 -- "$project_dir/routing_system/org.gnome.adguardvpn.site-routing.policy" /usr/share/polkit-1/actions/
 /usr/bin/systemctl daemon-reload
 /usr/bin/systemctl enable adguardvpn-site-routing-guard.service adguardvpn-site-routing.service
-/usr/bin/systemctl restart adguardvpn-site-routing-guard.service
+# Starting an active guard is a no-op. Restarting it would propagate to NetworkManager.
+/usr/bin/systemctl start adguardvpn-site-routing-guard.service
 /usr/bin/systemctl start adguardvpn-site-routing.service
 printf 'Site Routing installed. Open extension preferences → Site Routing.\n'
 printf 'An empty rule list makes no network changes. See docs/site-routing.md before adding rules.\n'

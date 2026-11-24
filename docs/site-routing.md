@@ -134,8 +134,11 @@ Ordinary unmanaged destination overlaps and per-destination command/verification
 failures quarantine the affected IPs. Independently verified destinations retain
 their allow paths; unchanged paths keep a lookup while policy priorities move.
 Missing interfaces and partial writes retain known-IP guards and pending owned
-objects, which reconciliation retries after the tunnel returns with a new
-source address/name/index. A shared firewall failure, unsafe priority allocation
+objects. NetworkManager VPN discovery requires the activation's IP configuration
+object to match a realized tunnel device. The reader checks the kernel interface
+index against the index it recorded for that binding. Reconciliation resumes
+when NetworkManager confirms the replacement.
+A shared firewall failure, unsafe priority allocation
 or foreign object in a reserved owned table remains a conservative global stop.
 
 `active` verifies routing, not that a particular remote application is healthy
@@ -147,11 +150,11 @@ when a known AAAA destination cannot be protected through its target.
 The daemon does not automatically adopt or delete foreign routes or rules.
 An overlapping destination policy blocks application and requires review.
 
-1. Use **Check** to inspect the complete diff. Only exact host routes and simple
-   destination rules that match accessible saved NM settings are eligible.
-   Tables, priorities, selectors and, for routes, interface/gateway/source/metric
-   must match. Broader networks, ambiguous defaults and complex selectors
-   require manual administrator review.
+1. Use **Check** to inspect the complete diff. Each saved entry proposed for
+   removal must match a single live legacy policy. Only exact host routes and
+   simple destination rules are eligible. Tables, priorities, selectors and,
+   for routes, interface/gateway/source/metric must match. Broader networks,
+   ambiguous defaults and complex selectors require administrator review.
 2. **Install protected replacement** authorizes the reviewed plan, retaining
    existing NM entries and saving a private, hashed backup of non-secret settings.
 3. Verify the protected target and both VPNs. **Remove listed legacy entries**
@@ -165,7 +168,11 @@ An overlapping destination policy blocks application and requires review.
    and the reviewed kernel objects, then removes the replacement rule. This
    explicitly returns the hostname to its previous routing behavior.
 
-If NM settings changed after preview, automatic overwrite is refused. Partial
+Retirement and rollback check the profile version during the write. If
+NetworkManager reports a concurrent edit or cannot provide a usable version,
+the migration refuses the write. Recheck previews saved before exact-entry
+verification. An already applied older plan retains its rollback path, with
+the usual profile and kernel checks. Partial
 failure retains the backup and guards and offers retry/rollback. A missing
 profile requires administrator review; the service does not invent a replacement
 profile. Reassignment is a separate operation. Changing or removing the saved
@@ -190,8 +197,9 @@ before sharing. See [the synchronized capture plan](vpn-underlay-prerequisite.md
 
 Update the checkout, rebuild/reinstall the extension and rerun
 `sudo ./scripts/install-site-routing.sh`. The routing installer preserves the
-private journal, stops only its manager and restores guards before restarting
-that manager. AdGuard authentication remains a separate helper procedure.
+private journal and starts the guard if needed. It keeps an active guard
+running while the manager restores known-address protection on startup. AdGuard
+authentication remains a separate helper procedure.
 
 ## Uninstall and retained data
 
@@ -208,6 +216,9 @@ Prefer removing rules with the UI first, reviewing any migration rollback, then:
 ```bash
 sudo ./scripts/uninstall-site-routing.sh
 ```
+
+After successful policy cleanup, the script removes the NetworkManager drop-in
+and reloads systemd before stopping the guard.
 
 By default this refuses to uninstall while rules or known-address protection
 remain and restarts the manager after that refusal. To explicitly release

@@ -25,6 +25,11 @@ real Gio/GLib variants with an injected bus. CI enforces 100% extension
 line/branch/function and Python statement/branch coverage, including the new
 manager and installed bootstrap; it does not exclude the privileged code.
 
+The adapter regressions cover stale VPN activations with reused tunnel
+addresses, NetworkManager profile edits during migration, and saved selectors
+without a matching live policy. Installer checks cover the guard dependency
+ordering during update and removal.
+
 The separate `routing-namespace` CI job runs the real `ip` and `nft` programs
 inside a new root Linux network namespace, using synthetic dummy interfaces
 and documentation addresses. It verifies IPv4/IPv6 route selection, terminal
