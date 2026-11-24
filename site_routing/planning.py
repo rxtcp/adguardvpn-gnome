@@ -8,7 +8,15 @@ def visible_providers(providers: dict, username: str) -> dict:
     return {key: provider for key, provider in providers.items() if not provider.users or username in provider.users}
 
 
-def plan_rules(rules: list[dict], providers: dict) -> dict[str, Assignment]:
+def migration_blocks(state: dict) -> dict[str, str]:
+    blocked = {rule['id']: rule['migration_error'] for rule in state['rules'] if rule.get('migration_error')}
+    for plan in state['migrations'].values():
+        if plan.get('pending_overlap') is not None:
+            blocked.setdefault(plan['rule_id'], 'A legacy deletion is unresolved. Known IPs stay blocked until recovery.')
+    return blocked
+
+
+def plan_rules(rules: list[dict], providers: dict, blocked_migrations: dict[str, str]) -> dict[str, Assignment]:
     targets = {}
     for rule in rules:
         for address in rule['addresses']:
@@ -18,6 +26,7 @@ def plan_rules(rules: list[dict], providers: dict) -> dict[str, Assignment]:
     for rule in rules:
         target = Target.parse(rule['target'])
         provider = visible_providers(providers, rule['owner_name']).get(target.key)
+        migration_error = blocked_migrations.get(rule['id'])
         families = {ipaddress.ip_address(address).version for address in rule['addresses']}
         usable = provider is not None and bool(families) and families <= set(provider.paths)
         if usable and provider.allowed_networks is not None:
@@ -27,8 +36,8 @@ def plan_rules(rules: list[dict], providers: dict) -> dict[str, Assignment]:
             rule['status'], rule['detail'] = 'conflict', 'An IP is assigned to different targets. Affected IPs are blocked.'
         elif provider is None:
             rule['status'], rule['detail'] = 'provider-missing', 'Provider is missing or no longer accessible; known IPs stay blocked.'
-        elif rule.get('migration_error'):
-            rule['status'], rule['detail'] = 'apply-error', rule['migration_error']
+        elif migration_error:
+            rule['status'], rule['detail'] = 'apply-error', migration_error
         elif rule.get('dns_error'):
             rule['status'], rule['detail'] = 'dns-error', rule['dns_error']
         elif not usable:
@@ -41,9 +50,11 @@ def plan_rules(rules: list[dict], providers: dict) -> dict[str, Assignment]:
             previous = assignments.get(address)
             if previous is not None and previous.path is None:
                 path = None
-            assignments[address] = Assignment(target.key, path)
+            blocked = bool(migration_error) or (previous is not None and previous.blocked)
+            assignments[address] = Assignment(target.key, path, blocked)
     for rule in rules:
-        if rule['status'] == 'active' and any(assignments[address].path is None for address in rule['addresses']):
+        if rule['status'] == 'active' and any(assignments[address].blocked or assignments[address].path is None
+                                              for address in rule['addresses']):
             rule['status'] = 'conflict'
             rule['detail'] = 'A shared IP is blocked by another rule. Review its target access and required address families.'
     return assignments

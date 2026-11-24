@@ -2,7 +2,7 @@
 import json
 import subprocess
 
-from .route_netlink import restore_legacy_route
+from .route_netlink import change_legacy_route
 
 IP = '/usr/sbin/ip'
 NFT = '/usr/sbin/nft'
@@ -28,7 +28,7 @@ def failure_reason(stderr: str) -> str:
 
 
 class CommandRunner:
-    restore_legacy_route = staticmethod(restore_legacy_route)
+    change_legacy_route = staticmethod(change_legacy_route)
 
     def run(self, argv: list[str], input_text: str | None = None) -> str:
         try:

@@ -112,6 +112,52 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.assertIn('198.51.100.9 . 17', allowed)
         self.assertNotIn('198.51.100.8 .', allowed)
 
+    def test_pending_deletion_keeps_a_shared_destination_blocked_across_restart(self):
+        self.resolver.answers['shared.example'] = self.resolver.answers['one.example']
+        first = self.add('one.example')
+        self.add('shared.example')
+        self.add('two.example')
+        state = self.store.load()
+        plan_id = '00000000-0000-4000-8000-000000000009'
+        legacy = {'kind': 'rule', 'family': 4,
+                  'data': {'dst': '198.51.100.8/32', 'table': 777, 'priority': 900, 'protocol': 'static'}}
+        state['migrations'][plan_id] = {'rule_id': first['id'], 'stage': 'retiring', 'owner_uid': 1000,
+            'target': TARGET, 'exact_entries': True, 'pending_overlap': {'index': 0, 'binding': {}}, 'overlaps': [legacy]}
+        state['rules'][0]['migration_error'] = 'Migration is incomplete.'
+        self.store.save(state)
+        self.kernel.protect_subset(['198.51.100.8'], state['kernel'], INSTALLATION)
+        self.runner.events.clear()
+
+        kernel = KernelBackend(self.runner)
+        migrations = MigrationManager(self.store, Mock(), kernel)
+        restarted = RoutingManager(self.store, self.registry, self.resolver, kernel, clock=lambda: 1000, migrations=migrations)
+        restarted.refresh()
+        self.assertEqual({rule['domain']: rule['status'] for rule in restarted.rules(1000)},
+                         {'one.example': 'apply-error', 'shared.example': 'conflict', 'two.example': 'active'})
+        allowed = [line for event in self.runner.events if event[0] == 'nft' for line in event[1].splitlines()
+                   if line.startswith('set allowed4')]
+        self.assertTrue(allowed)
+        self.assertTrue(all('198.51.100.8 .' not in line and '198.51.100.9 . 17' in line for line in allowed))
+        self.assertTrue(kernel.verify_replacement(['198.51.100.8'], self.store.state['kernel'], Target.parse(TARGET).key))
+        self.assertEqual(self.store.state['migrations'][plan_id]['pending_overlap'], {'index': 0, 'binding': {}})
+
+        saved = self.store.load()
+        del saved['rules'][0]['migration_error']
+        self.store.save(saved)
+        restarted.refresh()
+        self.assertIn('deletion is unresolved', restarted.rules(1000)[0]['detail'])
+        self.assertNotIn('198.51.100.8 .', [line for line in self.runner.events[-1][1].splitlines()
+                                           if line.startswith('set allowed4')][0])
+
+        saved = self.store.load()
+        saved['migrations'][plan_id]['pending_overlap'] = None
+        saved['migrations'][plan_id]['stage'] = 'retired'
+        self.store.save(saved)
+        restarted.refresh()
+        self.assertEqual({rule['status'] for rule in restarted.rules(1000)}, {'active'})
+        allowed = next(line for line in self.runner.events[-1][1].splitlines() if line.startswith('set allowed4'))
+        self.assertIn('198.51.100.8 . 17', allowed)
+
     def test_check_reconciles_live_state_and_restart_does_not_publish_a_stale_active_status(self):
         rule = self.add('one.example')
         restarted = RoutingManager(self.store, self.registry, self.resolver, self.kernel, clock=lambda: 1005)

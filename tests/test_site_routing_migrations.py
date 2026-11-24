@@ -315,7 +315,7 @@ class MigrationTests(unittest.TestCase):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'preview'})
 
     def test_failed_retirement_retains_backup_and_guard_then_can_retry_or_rollback(self):
-        from site_routing.planning import plan_rules
+        from site_routing.planning import migration_blocks, plan_rules
         from site_routing_fakes import Registry
         plan = self.manager.preview(self.state, self.rule)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
@@ -328,7 +328,7 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'overwrite was refused'):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'failed')
-        plan_rules([self.rule], Registry().discover())
+        plan_rules([self.rule], Registry().discover(), migration_blocks(self.state))
         self.assertEqual(self.rule['status'], 'apply-error')
         self.assertEqual(self.kernel.events, ['block'])
         backup = self.state['migrations'][plan['id']]['profiles'][0]

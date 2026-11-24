@@ -61,24 +61,50 @@ class NamespaceRoutingTests(unittest.TestCase):
         row4 = legacy_routes(4)[0]
         item4 = {'kind': 'route', 'family': 4, 'data': row4}
         binding4 = backend.change_legacy(item4, 'del')
-        restore = runner.restore_legacy_route
+        change = runner.change_legacy_route
 
-        def reuse_name(item, index):
+        def reuse_name(item, action, index):
             self.command('link', 'set', original.interface, 'down')
             self.command('link', 'set', original.interface, 'name', 'fixtureverified')
             self.command('link', 'set', 'fixtureverified', 'up')
             replacement, _ = self.tunnel('192.0.2.7', '2001:db8:2::7', name=original.interface)
             self.assertNotEqual(replacement.ifindex, index)
-            restore(item, index)
+            change(item, action, index)
 
-        with patch.object(runner, 'restore_legacy_route', side_effect=reuse_name):
+        with patch.object(runner, 'change_legacy_route', side_effect=reuse_name):
             backend.change_legacy(item4, 'add', binding=binding4)
         self.assertEqual(legacy_routes(4), [{**row4, 'dev': 'fixtureverified'}])
 
         self.command('link', 'del', 'fixtureverified')
         with self.assertRaisesRegex(RuntimeError, 'kernel refused'):
-            restore(item4, original.ifindex)
+            change(item4, 'add', original.ifindex)
         self.assertEqual(legacy_routes(4), [])
+
+    def test_legacy_route_delete_preserves_identical_route_on_reused_interface_name(self):
+        self.command('link', 'set', 'lo', 'up')
+        original, _ = self.tunnel()
+        runner = CommandRunner()
+        backend = KernelBackend(runner)
+        route_args = ('-4', 'route', 'add', '198.51.100.8/32', 'table', '777',
+                      'dev', original.interface, 'proto', 'static', 'metric', '20')
+        self.command(*route_args)
+        def legacy_routes():
+            return [row for row in runner.read_ip(4, 'route', 'show', 'table', 'all') if row.get('table') == 777]
+
+        row = legacy_routes()[0]
+        item = {'kind': 'route', 'family': 4, 'data': row}
+
+        def reuse_name(binding):
+            self.assertEqual(binding['ifindex'], original.ifindex)
+            self.command('link', 'del', original.interface)
+            unrelated, _ = self.tunnel(name=original.interface)
+            self.assertNotEqual(unrelated.ifindex, original.ifindex)
+            self.command(*route_args)
+            self.assertEqual(legacy_routes(), [row])
+
+        with self.assertRaisesRegex(RuntimeError, 'kernel refused'):
+            backend.change_legacy(item, 'del', before_delete=reuse_name)
+        self.assertEqual(legacy_routes(), [row])
 
     def test_independent_conflict_and_real_device_loss_recover_without_releasing_known_ips(self):
         self.command('link', 'set', 'lo', 'up')

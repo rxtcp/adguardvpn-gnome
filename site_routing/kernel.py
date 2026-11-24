@@ -33,6 +33,7 @@ class KernelBackend:
 
     def apply(self, assignments: dict, journal: dict, installation_id: str, approved=(), checkpoint=None) -> dict:
         known = sorted(set(journal['known']) | set(assignments))
+        blocked = {address for address, item in assignments.items() if item.blocked}
         snapshots = self.snapshot()
         previous = list(dict.fromkeys(OwnedObject.parse(row) for row in [*journal['objects'], *journal.get('pending_objects', [])]))
         try:
@@ -43,7 +44,8 @@ class KernelBackend:
         desired = plan.objects
         stable = {}
         for item in desired:
-            if item.kind == 'route' and item in previous and self._present(item, snapshots) and self._confirmed(item):
+            if (item.kind == 'route' and item.address not in blocked and item in previous
+                    and self._present(item, snapshots) and self._confirmed(item)):
                 stable[item.address] = item.path.ifindex
         self.firewall.apply(known, stable, installation_id)
         pending = {**journal, 'known': known, 'tables': {**journal['tables'], **plan.tables}, 'priority': plan.priority,
@@ -52,7 +54,8 @@ class KernelBackend:
             checkpoint(pending)
         changes = apply_objects(self.runner, previous, desired, snapshots, self._present, self._verified, set(stable))
         protected = set(assignments) | set(changes.failures)
-        self.firewall.apply(protected, changes.allowed, installation_id)
+        allowed = {address: index for address, index in changes.allowed.items() if address not in blocked}
+        self.firewall.apply(protected, allowed, installation_id)
         retained = {item.table for item in changes.pending if item.kind != 'block'}
         tables = {key: value for key, value in journal['tables'].items() if value in retained} | plan.tables
         return {'objects': [item.json() for item in changes.objects],
@@ -135,8 +138,8 @@ class KernelBackend:
             return None
         if action == 'del' and before_delete is not None:
             before_delete(current)
-        if route and action == 'add':
-            self.runner.restore_legacy_route(item, current['ifindex'])
+        if route:
+            self.runner.change_legacy_route(item, action, current['ifindex'])
         else:
             self.runner.write_ip(item['family'], *arguments)
         return current

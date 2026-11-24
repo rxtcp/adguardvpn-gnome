@@ -30,9 +30,10 @@ names and addresses across manager restart, NetworkManager profile edits during
 migration, and saved selectors without a matching live policy. An older
 protected migration can get a fresh diff with its assignment and known IPs
 intact. Rollback tests cover a protected plan with a reused tunnel name, a crash
-between kernel deletion and saving its outcome, and a confirmation that becomes
-stale during retirement. Namespace tests exercise IPv4 and IPv6 restoration by
-interface index, including a name change immediately before the write.
+between kernel deletion and saving its outcome, continued blocking after
+restart, and a confirmation that becomes stale during retirement. Namespace
+tests exercise IPv4 and IPv6 route changes by interface index and verify that
+name reuse during deletion leaves the unrelated interface's route in place.
 Installer checks cover update and removal dependency ordering.
 CI builds the NetworkManager patch that exports the interface index.
 

@@ -22,11 +22,12 @@ class LegacyRouteNetlinkTests(unittest.TestCase):
     def ack(error=0, *, size=20, kind=2, sequence=1):
         return struct.pack('=IHHIIi', size, kind, 0, sequence, 0, error)
 
-    def request(self, item):
-        CommandRunner().restore_legacy_route(item, 17)
+    def request(self, item, action='add'):
+        CommandRunner().change_legacy_route(item, action, 17)
         message, peer = self.channel.sendto.call_args.args
         self.assertEqual(peer, (0, 0))
-        self.assertEqual(struct.unpack_from('=IHHII', message), (len(message), 24, 0x605, 1, 0))
+        message_type, flags = (24, 0x605) if action == 'add' else (25, 0x005)
+        self.assertEqual(struct.unpack_from('=IHHII', message), (len(message), message_type, flags, 1, 0))
         route = struct.unpack_from('=8BI', message, 16)
         attributes = {}
         offset = 28
@@ -40,6 +41,15 @@ class LegacyRouteNetlinkTests(unittest.TestCase):
         route, attributes = self.request(self.v4)
         self.assertEqual(route, (socket.AF_INET, 32, 0, 0, 254, 4, 253, 1, 0))
         self.assertEqual(attributes, {1: ipaddress.ip_address('198.51.100.8').packed, 4: struct.pack('=I', 17)})
+
+    def test_ipv4_deletion_matches_output_index_and_does_not_request_creation(self):
+        route, attributes = self.request(self.v4, 'del')
+        self.assertEqual(route, (socket.AF_INET, 32, 0, 0, 254, 4, 255, 1, 0))
+        self.assertEqual(attributes, {1: ipaddress.ip_address('198.51.100.8').packed, 4: struct.pack('=I', 17)})
+
+    def test_ipv4_gateway_defaults_to_global_scope(self):
+        route, _ = self.request({**self.v4, 'data': {**self.v4['data'], 'gateway': '192.0.2.1'}})
+        self.assertEqual(route[6], 0)
 
     def test_ipv6_request_preserves_table_gateway_source_metric_and_preference(self):
         row = {'dst': '2001:db8::8/128', 'dev': 'fixturevpn', 'table': 777, 'protocol': 4,
@@ -55,7 +65,7 @@ class LegacyRouteNetlinkTests(unittest.TestCase):
         rule = {'kind': 'rule', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'priority': 100, 'table': 777}}
         for item, index in ((rule, 17), (self.v4, True), (self.v4, 0), (self.v4, 2**31)):
             with self.subTest(item=item, index=index), self.assertRaisesRegex(ValueError, 'kernel output interface'):
-                CommandRunner().restore_legacy_route(item, index)
+                CommandRunner().change_legacy_route(item, 'add', index)
         self.socket.assert_not_called()
 
     def test_rejected_or_unrelated_ack_cannot_confirm_restoration(self):
@@ -63,7 +73,7 @@ class LegacyRouteNetlinkTests(unittest.TestCase):
                              (self.ack(sequence=3), (0, 0)), (self.ack(size=19), (0, 0)), (self.ack(size=21), (0, 0))):
             self.channel.recvfrom.return_value = (data, sender)
             with self.assertRaisesRegex(RuntimeError, 'did not confirm'):
-                CommandRunner().restore_legacy_route(self.v4, 17)
+                CommandRunner().change_legacy_route(self.v4, 'add', 17)
         self.channel.recvfrom.return_value = (self.ack(-errno.ENODEV), (0, 0))
         with self.assertRaisesRegex(RuntimeError, 'kernel refused'):
-            CommandRunner().restore_legacy_route(self.v4, 17)
+            CommandRunner().change_legacy_route(self.v4, 'del', 17)

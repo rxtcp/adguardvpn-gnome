@@ -146,7 +146,9 @@ Rolling back a migration still at `protected` removes the Site Routing rule
 alone. Later rollback restores saved NetworkManager settings and replays only
 legacy kernel entries whose removal the service recorded. If interrupted removal
 leaves an uncertain outcome, restore the exact legacy policy through NetworkManager
-before retrying rollback. Site Routing retains protection until recovery is verified.
+before retrying rollback. Site Routing keeps the affected addresses blocked
+across service restarts until recovery is verified. Legacy route deletion and
+restoration both use the verified kernel interface index.
 
 Rerunning the Site Routing installer restores known-address protection through
 the manager while keeping the early guard and NetworkManager running.

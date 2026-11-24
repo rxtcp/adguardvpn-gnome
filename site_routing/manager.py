@@ -4,7 +4,7 @@ import threading
 import time
 
 from .dns_refresh import refresh_answers
-from .planning import plan_rules, public_rule, visible_providers
+from .planning import migration_blocks, plan_rules, public_rule, visible_providers
 from .protocol import validate_request
 from .rule_operations import change_rule, owned_rule, restore_failed_removal
 from .models import Target
@@ -81,7 +81,7 @@ class RoutingManager:
             if resolve_dns:
                 refresh_answers(state['rules'], providers, self.resolver, self.clock(), force_dns,
                                 lambda: self._publish(state))
-            assignments = plan_rules(state['rules'], providers)
+            assignments = plan_rules(state['rules'], providers, migration_blocks(state))
             known = sorted(set(state['kernel']['known']) | set(assignments))
             if len(known) > 4096:
                 raise ValueError('The total tracked-address limit has been reached.')

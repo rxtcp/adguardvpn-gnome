@@ -76,3 +76,4 @@ class Provider:
 class Assignment:
     target_key: str
     path: NetworkPath | None
+    blocked: bool = False  # Keep the route available for verification while denying egress.

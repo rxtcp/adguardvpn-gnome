@@ -5,6 +5,7 @@ import json
 from .migration_fields import settings_hash, settings_removals
 from .migration_matching import matches_entry
 from .models import Target
+from .planning import migration_blocks
 from .protocol import ROLLBACK_STAGES
 
 
@@ -127,7 +128,10 @@ class MigrationManager:
         if stage == 'retire' and (plan['stage'] not in ('protected', 'retiring', 'failed', 'retired') or
                 not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key)):
             raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
-        self.kernel.protect_subset(rule['addresses'], state['kernel'], state['installation_id'])
+        blocked_migrations = migration_blocks(state)
+        blocked = set(rule['addresses']) | {address for other in state['rules'] if other['id'] in blocked_migrations
+                                            for address in other['addresses']}
+        self.kernel.protect_subset(blocked, state['kernel'], state['installation_id'])
         if plan['stage'] == 'protected':
             plan['pending_overlap'] = None
         plan['stage'] = 'retiring' if stage == 'retire' else 'rolling-back'
