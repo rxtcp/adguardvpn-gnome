@@ -99,9 +99,10 @@ class PolicyOwnershipTests(unittest.TestCase):
         backend = KernelBackend(runner)
         manifest = backend.apply({'198.51.100.8': Assignment('vpn', PATH4)},
             {'objects': [], 'known': ['198.51.100.8'], 'tables': {}, 'priority': 0}, INSTALLATION)
-        self.assertTrue(backend.verify_replacement(['198.51.100.8'], manifest))
-        self.assertFalse(backend.verify_replacement([], manifest))
-        self.assertFalse(backend.verify_replacement(['198.51.100.9'], manifest))
+        self.assertTrue(backend.verify_replacement(['198.51.100.8'], manifest, 'vpn'))
+        self.assertFalse(backend.verify_replacement(['198.51.100.8'], manifest, 'another-vpn'))
+        self.assertFalse(backend.verify_replacement([], manifest, 'vpn'))
+        self.assertFalse(backend.verify_replacement(['198.51.100.9'], manifest, 'vpn'))
         route = next(OwnedObject.parse(row) for row in manifest['objects'] if row['kind'] == 'route')
         original = runner.read_ip
         runner.read_ip = lambda family, *args: [{'ifindex': 99, 'flags': ['UP'], 'addr_info': [{'local': PATH4.source}]}] if args[0] == 'address' else original(family, *args)
@@ -114,7 +115,7 @@ class PolicyOwnershipTests(unittest.TestCase):
         self.assertEqual(backend.diagnostics(['198.51.100.8']), [{'address': '198.51.100.8'}])
         runner.read_ip = Mock(side_effect=RuntimeError('not reachable'))
         self.assertEqual(backend.diagnostics(['198.51.100.8'])[0]['type'], 'unreachable-or-unavailable')
-        self.assertFalse(backend.verify_replacement(['198.51.100.8'], manifest))
+        self.assertFalse(backend.verify_replacement(['198.51.100.8'], manifest, 'vpn'))
 
     def test_reviewed_legacy_changes_are_exact_idempotent_and_keep_unrelated_rows(self):
         runner = KernelFixture(); backend = KernelBackend(runner)

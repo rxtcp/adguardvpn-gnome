@@ -38,9 +38,10 @@ class RoutingManager:
         with self._mutex, self.store.lock():
             state = self.store.load()
             removed = copy.deepcopy(owned_rule(state, request['id'], uid)) if operation == 'remove-rule' else None
-            providers = self.registry.discover()
-            rule = change_rule(state, request, providers, uid, username, self.clock())
             if 'migration' in request:
+                rule = owned_rule(state, request['id'], uid)
+                if rule['target'] != request['target'] or rule['domain'] != request['domain']:
+                    raise ValueError('A migration request must keep the saved hostname and target.')
                 if self.migrations is None:
                     raise ValueError('Migration adapter is unavailable.')
                 try:
@@ -51,6 +52,8 @@ class RoutingManager:
                     self.store.save(state)
                     self._publish(state)
                     raise
+            else:
+                rule = change_rule(state, request, self.registry.discover(), uid, username, self.clock())
             state['revision'] += 1
             self.store.save(state)
             self._state = copy.deepcopy(state)

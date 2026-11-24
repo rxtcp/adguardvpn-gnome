@@ -38,7 +38,7 @@ class MigrationTests(unittest.TestCase):
                 'data': {'priority': 900, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}}]
             def block(self, addresses, installation): self.events.append('block')
             def protect_subset(self, addresses, journal, installation): self.events.append('block')
-            def verify_replacement(self, addresses, journal): return True
+            def verify_replacement(self, addresses, journal, target_key): return True
             def change_legacy(self, entries, action): self.events.append(action)
         self.kernel, self.reader = Kernel(), Reader()
         self.manager = MigrationManager(self.store, self.reader, self.kernel)
@@ -177,3 +177,15 @@ class MigrationTests(unittest.TestCase):
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
         self.assertEqual(self.state['rules'], [])
         self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'rolled-back')
+
+    def test_approval_ends_when_the_bound_assignment_changes_or_is_removed(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        self.assertTrue(self.manager.approved(self.state))
+        self.rule['target'] = {'kind': 'direct', 'id': 'direct'}
+        self.assertEqual(self.manager.approved(self.state), [])
+        self.rule['target'] = TARGET
+        self.state['rules'] = [{**self.rule, 'owner_uid': 1001}]
+        self.assertEqual(self.manager.approved(self.state), [])
+        self.state['rules'] = []
+        self.assertEqual(self.manager.approved(self.state), [])

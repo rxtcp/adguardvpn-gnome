@@ -1,10 +1,61 @@
 # SR-UNDERLAY-01: verified VPN control-plane routing
 
-**Status: open; blocks dual-VPN release acceptance.** Site Routing v1 manages
-known addresses of sites inside a selected connection. It does not install
-exceptions for the VPN's own server/control connection. This prerequisite is
-tracked separately from recovery of per-site routes. AC-06 and the complete
-AC-03/04/11 coexistence run must not be declared successful until it is resolved.
+**Status: TUN/AUTO remains open.** For deployments that only need AdGuard for
+explicitly assigned sites, the protected AdGuard TUN can run in `NONE` routing
+mode. This removes the conflicting AdGuard default policy while Site Routing
+continues to select the TUN for known, assigned IPs. The automated namespace
+test covers this topology; the Fedora acceptance run remains pending.
+
+## Site-only AdGuard routing with TUN/NONE
+
+Use this option if the intended underlay for OpenVPN is already selected by
+ordinary system routing and you want unassigned traffic to keep following that
+routing. In `NONE`, AdGuard brings up its TUN without taking over the default
+route. System-wide AdGuard routing is lost in this mode. Site Routing still
+needs the optional routing service and the authenticated protected helper.
+The setting applies to the separate protected profile only. DNS settings are
+separate and should be checked on the Fedora bench.
+
+1. Disconnect the protected VPN with `adguardvpn-gnome-ctl disconnect` and
+   confirm it is disconnected. Leave it stopped during configuration.
+2. In a terminal, use the following function with the installed, signed,
+   root-owned helper copy. Review the current mode first. Use `NONE` only if
+   site-only routing is appropriate for this machine.
+
+   ```bash
+   protected_adguard_config() {
+       sudo /usr/bin/env -i \
+           HOME=/var/lib/adguardvpn-gnome \
+           XDG_CONFIG_HOME=/var/lib/adguardvpn-gnome/config \
+           XDG_DATA_HOME=/var/lib/adguardvpn-gnome/data \
+           XDG_CACHE_HOME=/var/lib/adguardvpn-gnome/cache \
+           USER=root LOGNAME=root LANG=C.UTF-8 \
+           PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+           /usr/libexec/adguardvpn-gnome/adguardvpn-cli config "$@"
+   }
+   protected_adguard_config show
+   protected_adguard_config set-tun-routing-mode NONE
+   ```
+
+3. Reconnect protected AdGuard and OpenVPN. In **Check**, confirm each assigned
+   site uses its target and verify actual OpenVPN server egress using the bench
+   record below. Check the failover remote and confirm an unassigned site uses
+   the intended ordinary path. An address that is also a known site IP still
+   has that site's policy, so this option requires distinct server and protected
+   site IPs.
+4. To restore the previous routing mode, disconnect the protected VPN again,
+   run `protected_adguard_config set-tun-routing-mode AUTO` if `AUTO` was the
+   previous value, and reconnect. The helper login script selects `AUTO` again
+   if rerun. To remove Site Routing in `NONE` mode, account for the fact that
+   removed assignments return to ordinary routing. See [removal](site-routing.md#uninstall-and-retained-data).
+
+The isolated test models the vendor mode by removing its default policy with
+the TUN still present. It captures IPv4 and IPv6 UDP on the ordinary uplink for
+two remotes per family, including a changed address and port, and verifies
+that assigned sites keep their selected route or remain blocked after tunnel
+loss. It uses synthetic interfaces and no vendor executable.
+
+Reference: [AdGuard CLI routing modes](https://adguard-vpn.com/kb/adguard-vpn-for-linux/settings/#vpn-tunnel-routing-mode-none-auto-or-script).
 
 ## Evidence and scope
 
@@ -31,7 +82,7 @@ alone are insufficient proof of those facts. Assuming that every VPN should
 bypass every other VPN could break an intentional VPN chain. Site rules do not
 silently rewrite NM settings, vendor exclusions or unrelated server routes.
 
-## Requirements for closing this prerequisite
+## Requirements for retaining TUN/AUTO
 
 1. Establish the intended underlay from trusted NM activation state and an
    explicit, reviewed policy. Preserve stable NM identities through physical
@@ -53,6 +104,15 @@ silently rewrite NM settings, vendor exclusions or unrelated server routes.
 6. Verify actual socket egress and recovery on the supported Fedora bench with
    both VPNs, including multiple remotes and a changed remote address/port.
    Repeat disconnect, stale-activation, reconnect and reboot acceptance.
+
+An integration point for AUTO is a socket mark set by the VPN launcher before
+its first route lookup, combined with policy for an explicitly selected
+underlay. Standalone OpenVPN exposes `--mark`. The upstream
+[NetworkManager OpenVPN launcher](https://github.com/NetworkManager/NetworkManager-openvpn/blob/main/src/nm-openvpn-service.c)
+constructs its own argument list and does not forward that option from a saved
+VPN profile. The daemon cannot assume a marked socket is available on the
+current Fedora setup. Applying an address-only exception or inferring the
+process from an ephemeral port would allow other traffic or miss reconnects.
 
 ## Collect a synchronized, redacted bench record
 

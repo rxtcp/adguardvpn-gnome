@@ -107,9 +107,10 @@ addresses, application DoH/DoT and DNS changes before synchronization limit this
 IP-based guarantee; DNS query privacy is not separately guaranteed.
 
 The VPN's own server/control connection needs a separately verified underlay.
-Site rules do not install server-endpoint exceptions. The reported Fedora
-dual-VPN acceptance remains unsuccessful; see the blocking prerequisite
-[SR-UNDERLAY-01](docs/vpn-underlay-prerequisite.md).
+If AdGuard is needed only for explicitly assigned sites, see the optional
+[TUN/NONE setup](docs/vpn-underlay-prerequisite.md#site-only-adguard-routing-with-tunnone).
+Unassigned traffic follows ordinary system routing in that setup. Automatic
+coexistence with AdGuard TUN/AUTO and live Fedora acceptance remain open.
 
 This requires a **separate** optional system component. After installing the
 extension, review [docs/site-routing.md](docs/site-routing.md), then run from

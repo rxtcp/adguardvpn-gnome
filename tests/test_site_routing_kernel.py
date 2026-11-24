@@ -134,6 +134,21 @@ class RoutingKernelTests(unittest.TestCase):
         self.assertTrue(result['pending_objects'])
         self.assertEqual(len([event for event in runner.events if event[0] == 'nft']), 1)
 
+    def test_route_lookup_must_select_the_verified_source_address(self):
+        runner = KernelFixture()
+        original = runner.read_ip
+
+        def read_ip(family, *args):
+            rows = original(family, *args)
+            return [{**rows[0], 'prefsrc': '192.0.2.99'}] if args[:2] == ('route', 'get') else rows
+
+        runner.read_ip = read_ip
+        result = KernelBackend(runner).apply({'198.51.100.8': Assignment('vpn', PATH4)},
+            {'objects': [], 'known': ['198.51.100.8'], 'tables': {}, 'priority': 0}, INSTALLATION)
+        self.assertEqual(result['failures']['198.51.100.8']['status'], 'apply-error')
+        scripts = [script for event, script in (entry[:2] for entry in runner.events) if event == 'nft']
+        self.assertNotIn('198.51.100.8 .', scripts[-1])
+
     def test_ownership_journal_rejects_arbitrary_arguments(self):
         for value in ({'kind': 'shell', 'address': '198.51.100.8'},
                       {'kind': 'block', 'address': '198.51.100.8;id', 'priority': 2}):

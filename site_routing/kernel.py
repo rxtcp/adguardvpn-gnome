@@ -68,7 +68,10 @@ class KernelBackend:
                 not {'tentative', 'dadfailed'} & set(address.get('flags', [])) for address in row.get('addr_info', [])) for row in addresses):
             return False
         routes = self.runner.read_ip(item.family, 'route', 'get', item.address)
-        return bool(routes) and routes[0].get('dev') == path.interface and table_number(routes[0].get('table', 254)) == item.table and routes[0].get('gateway', '') == path.gateway
+        return (bool(routes) and routes[0].get('dev') == path.interface
+                and table_number(routes[0].get('table', 254)) == item.table
+                and routes[0].get('gateway', '') == path.gateway
+                and routes[0].get('prefsrc') == path.source)
 
     def _confirmed(self, item: OwnedObject) -> bool:
         try:
@@ -94,9 +97,11 @@ class KernelBackend:
             legacy_arguments(item, 'del')
         return result
 
-    def verify_replacement(self, addresses, journal) -> bool:
+    def verify_replacement(self, addresses, journal, target_key: str) -> bool:
+        expected_table = journal['tables'].get(target_key)
         routes = [OwnedObject.parse(row) for row in journal['objects'] if row['kind'] == 'route']
-        return bool(addresses) and all(any(item.address == address and self._confirmed(item) for item in routes) for address in addresses)
+        return bool(addresses) and all(any(item.address == address and item.table == expected_table
+            and self._confirmed(item) for item in routes) for address in addresses)
 
     def change_legacy(self, entries: list[dict], action: str) -> None:
         for item in entries:

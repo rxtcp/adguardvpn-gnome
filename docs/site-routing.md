@@ -15,9 +15,11 @@ and [the original specification](site-routing-spec.md).
 A preliminary [Fedora review run](https://github.com/rxtcp/adguardvpn-gnome/pull/4#issuecomment-7106099077)
 confirmed one offline-deny snapshot but did not pass dual-VPN acceptance.
 [SR-UNDERLAY-01](vpn-underlay-prerequisite.md) tracks the VPN server/control
-connection as a separate release prerequisite. Site rules do not add endpoint
-exceptions or promise that a corporate VPN can establish its own connection
-through the intended underlay while another VPN controls the default policy.
+connection while AdGuard controls the default policy in TUN/AUTO. If AdGuard
+is only needed for assigned sites, the optional
+[TUN/NONE setup](vpn-underlay-prerequisite.md#site-only-adguard-routing-with-tunnone)
+preserves ordinary routing for other traffic, including OpenVPN's server
+connection if its endpoint is not covered by a site rule.
 
 ## What protection means
 
@@ -150,7 +152,8 @@ An overlapping destination policy blocks application and requires review.
    existing NM entries and saving a private, hashed backup of non-secret settings.
 3. Verify the protected target and both VPNs. **Remove listed legacy entries**
    requires a separate confirmation. It freshly verifies every replacement
-   route before and after retiring entries, even if a prior snapshot was
+   route through the saved target's table before and after retiring entries,
+   including the kernel's selected source address, even if a prior snapshot was
    `active`, and deletes only the reviewed entries. Only the migration's
    destinations are denied during that transaction; independent allow paths
    are preserved when their current kernel route can be reverified.
@@ -161,7 +164,9 @@ An overlapping destination policy blocks application and requires review.
 If NM settings changed after preview, automatic overwrite is refused. Partial
 failure retains the backup and guards and offers retry/rollback. A missing
 profile requires administrator review; the service does not invent a replacement
-profile. No `GetSecrets` call is made and diagnostic responses do not expose
+profile. Reassignment is a separate operation. Changing or removing the saved
+assignment invalidates its overlap approval while preserving the backup. No
+`GetSecrets` call is made and diagnostic responses do not expose
 whole profiles, private URL paths or credentials. Do not publish diagnostics
 containing your real domains or routes.
 

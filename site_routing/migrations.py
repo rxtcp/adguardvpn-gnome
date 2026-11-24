@@ -4,6 +4,7 @@ import json
 
 from .migration_fields import settings_hash, settings_removals
 from .migration_matching import matches_profile
+from .models import Target
 
 
 def public_plan(plan: dict) -> dict:
@@ -47,7 +48,12 @@ class MigrationManager:
         return public_plan(plan)
 
     def approved(self, state: dict) -> list[dict]:
-        return [item for plan in state['migrations'].values() if plan['stage'] in ('protected', 'retiring', 'retired', 'failed') for item in plan['overlaps']]
+        rules = {rule['id']: rule for rule in state['rules']}
+        return [item for plan in state['migrations'].values()
+                if plan['stage'] in ('protected', 'retiring', 'retired', 'failed')
+                and (rule := rules.get(plan['rule_id'])) is not None
+                and rule['owner_uid'] == plan['owner_uid'] and rule['target'] == plan['target']
+                for item in plan['overlaps']]
 
     def _profiles(self, plan: dict) -> dict:
         profiles = {profile['uuid']: profile for profile in self.reader.profiles()}
@@ -69,13 +75,14 @@ class MigrationManager:
 
     def _apply(self, state: dict, rule: dict, plan: dict, stage: str) -> None:
         profiles = self._profiles(plan)
+        target_key = Target.parse(rule['target']).key
         if stage == 'protect':
             if plan['stage'] not in ('preview', 'protected') or any(settings_hash(profiles[backup['uuid']]['settings']) != backup['before_hash'] for backup in plan['profiles']):
                 raise ValueError('NM settings changed; review a new diff before proceeding.')
             plan['stage'] = 'protected'
             return
         if stage == 'retire' and (plan['stage'] not in ('protected', 'retiring', 'failed', 'retired') or
-                not self.kernel.verify_replacement(rule['addresses'], state['kernel'])):
+                not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key)):
             raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
         if stage == 'rollback' and plan['stage'] not in ('protected', 'retired', 'failed', 'retiring', 'rolling-back'):
             raise ValueError('There is no applied migration to roll back.')
@@ -92,7 +99,7 @@ class MigrationManager:
                 if current != expected:
                     self.reader.update(profile, backup['after'] if stage == 'retire' else backup['before'])
             self.kernel.change_legacy(plan['overlaps'], 'del' if stage == 'retire' else 'add')
-            if stage == 'retire' and not self.kernel.verify_replacement(rule['addresses'], state['kernel']):
+            if stage == 'retire' and not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key):
                 raise ValueError('Replacement disappeared during legacy removal; guards and backup are retained. Retry or roll back.')
         except (OSError, RuntimeError, ValueError):
             plan['stage'] = 'failed'

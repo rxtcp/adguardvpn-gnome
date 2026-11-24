@@ -92,6 +92,19 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.assertEqual(self.statuses()['two.example'], 'active')
         self.assertIn('not verified', self.manager.rules(1000)[0]['detail'])
 
+    def test_migration_request_cannot_persist_an_unreviewed_target_change(self):
+        rule = self.add('one.example')
+        migrations = Mock()
+        migrations.apply.side_effect = ValueError('This migration plan is stale.')
+        self.manager.migrations = migrations
+        with self.assertRaises(ValueError):
+            self.manager.handle({'operation': 'update-rule', 'id': rule['id'], 'domain': rule['domain'],
+                'target': {'kind': 'direct', 'id': 'direct'},
+                'migration': {'id': '00000000-0000-4000-8000-000000000009', 'stage': 'retire'}}, 1000, 'fixtureuser')
+        self.assertEqual(self.store.state['rules'][0]['target'], TARGET)
+        self.assertEqual(self.manager.rules(1000)[0]['status'], 'active')
+        migrations.apply.assert_not_called()
+
     def test_migration_guard_preserves_a_verified_independent_allow_path(self):
         self.add('one.example'); self.add('two.example')
         self.kernel.protect_subset(['198.51.100.8'], self.store.state['kernel'], self.store.state['installation_id'])

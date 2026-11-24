@@ -12,10 +12,9 @@ This implementation remains experimental. The table distinguishes executable
 test evidence from remaining live work. No workstation VPN or routing
 configuration was changed by the implementation tools.
 
-**Blocking prerequisite:** [SR-UNDERLAY-01](vpn-underlay-prerequisite.md).
-Site rules do not install VPN server-endpoint exceptions. The intended control
-flow underlay, multiple/current remotes and address changes require separate
-proof before claiming dual-VPN acceptance.
+**TUN/AUTO prerequisite:** [SR-UNDERLAY-01](vpn-underlay-prerequisite.md).
+An optional TUN/NONE setup avoids the conflicting default policy for deployments
+using AdGuard only for assigned sites. Both modes need live verification.
 
 ## Automated evidence
 
@@ -36,9 +35,10 @@ continued independent egress and recovery on a new source/interface. Each case
 creates its own child namespace and refuses the parent namespace. These are Linux
 policy tests, not an OpenVPN, AdGuard or Fedora boot smoke test.
 
-The control-flow lookup reproduction deliberately still selects AdGuard ahead
-of physical main-table host routes for two synthetic server endpoints. A green
-test documents that prerequisite; it does not certify control-plane protection.
+The AUTO lookup reproduction still selects AdGuard ahead of physical host
+routes for two synthetic endpoints. A separate TUN/NONE topology test captures
+IPv4 and IPv6 UDP packets at an uplink peer as remotes change address and port.
+It also checks selected site routes and continued protection after TUN loss.
 
 | Criterion | Automated evidence | Required live Fedora check |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ test documents that prerequisite; it does not certify control-plane protection.
 | AC-03 | Interface removed in namespace; RPDB and independent egress guard deny fallback. | One offline deny was reported; **critical** repeated disconnect and recovery captures remain required. |
 | AC-04 | Activated-without-tunnel has an explicit reason; Check re-reconciles and timestamps its provider/routes. | Reported stale activation was correctly blocked; **critical** synchronized recovery retest remains required. |
 | AC-05 | UUID survives profile rename and new interface/index; namespace reconnect. | Reconnect real VPN with a different interface name. |
-| AC-06 | Dynamic foreign table/priority coexistence, distinct synthetic tunnels and control-flow lookup reproduction. | **Blocked by SR-UNDERLAY-01:** verify actual AdGuard/NM socket egress and reconnects on Fedora. |
+| AC-06 | Dynamic foreign table/priority coexistence, AUTO lookup reproduction and observed packet egress with the TUN/NONE topology. | **TUN/AUTO blocked by SR-UNDERLAY-01.** Verify actual socket egress and reconnects on Fedora in each supported mode. |
 | AC-07 | A/AAAA/CNAME TTL, retained old IPs, DNS errors, rate and size limits. | Controlled DNS change with both VPNs and caches. |
 | AC-08 | Shared IP and IPv4-mapped IPv6 conflicts never select a winner. | Two test names sharing addresses, different assignments. |
 | AC-09 | Physical interface and gateway discovery, explicit route arguments. | Confirm direct egress while both VPNs are active. |
