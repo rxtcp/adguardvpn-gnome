@@ -106,5 +106,5 @@ jobs:
           meson setup build -Dcrypto=gnutls -Dintrospection=false -Dvapi=false -Dtests=no \
             -Dpolkit=false -Dselinux=false -Dlibaudit=no -Dlibpsl=false -Dppp=false \
             -Dmodem_manager=false -Dwifi=false -Dovs=false -Dconcheck=false \
-            -Dnm_cloud_setup=false -Dnmtui=false -Dqt=false -Debpf=false
+            -Dnm_cloud_setup=false -Dnmcli=false -Dnmtui=false -Dqt=false -Debpf=false
           ninja -C build -j2 src/core/NetworkManager
