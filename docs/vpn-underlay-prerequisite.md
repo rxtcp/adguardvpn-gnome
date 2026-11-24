@@ -27,24 +27,28 @@ userspace OpenVPN and refuses HTTP/SOCKS proxy profiles.
    resolved OpenVPN binary's `--version` output before accepting opted-in launches.
 
 2. Install Site Routing normally. Disconnect the test OpenVPN profile and leave
-   protected AdGuard in `TUN/AUTO`. Choose a dedicated physical test connection
-   whose IPv4/IPv6 IP configuration can be placed in table 39990. Record the
-   profile's current route-table and any existing policy rules for rollback.
+   protected AdGuard in `TUN/AUTO`. Choose the approved physical test connection.
+   Record the profile's current static routes, route-table and policy rules for rollback.
    Reserve table 39990 for this connection and check both families for competing
    rules at priorities 1–11. Priority 0 belongs to Linux's local table. Site
    Routing's exact per-site rules may precede the marked rules.
 
-   On a dedicated approved profile with NetworkManager-managed defaults, the
-   following puts DHCP, RA and connected routes in the dedicated table. Since
-   this can move a profile's default out of `main`, arrange ordinary IP and DNS
-   connectivity in the bench topology before activating AdGuard. Review any
-   unmarked routing separately. For a bench where this is the sole ordinary
-   uplink, an explicit fallback rule after the AdGuard rule can use the
-   dedicated table. There is no automatic change to an existing uplink profile.
+   With stable, verified on-link gateways, add defaults to the dedicated table
+   while keeping the profile's ordinary defaults in place. Use the address
+   family or families available on this uplink. In particular, preserve the
+   ordinary route that protected AdGuard itself uses to reach its servers.
 
    ```bash
-   sudo nmcli connection modify uuid "$UPLINK_UUID" ipv4.route-table 39990 ipv6.route-table 39990
+   sudo nmcli connection modify uuid "$UPLINK_UUID" +ipv4.routes "0.0.0.0/0 $IPV4_GATEWAY table=39990 onlink=true"
+   sudo nmcli connection modify uuid "$UPLINK_UUID" +ipv6.routes "::/0 $IPV6_GATEWAY table=39990 onlink=true"
    ```
+
+   If the uplink gateways change through DHCP or RA, an administrator can
+   instead put its NM-managed routes in table 39990 via `ipv4.route-table` and
+   `ipv6.route-table`. This can move an existing default out of `main`. Use this
+   arrangement only when the deployment provides ordinary IP and DNS
+   connectivity separately, including the AdGuard server path. Site Routing
+   never changes those settings automatically.
 
 3. Install the following JSON at
    `/etc/adguardvpn-site-routing/openvpn-underlay.json`. The parent directory

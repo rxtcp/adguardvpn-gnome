@@ -130,7 +130,9 @@ raw stderr, URLs, private route arguments or profile settings.
 The [VPN underlay prerequisite](vpn-underlay-prerequisite.md) documents
 the optional marked OpenVPN packages. The namespace tests characterize
 unmarked AUTO lookup and capture marked IPv4 and IPv6 packets and a terminal
-deny after route loss. The live dual-VPN acceptance run remains open.
+deny after route loss. The `openvpn-adapter` CI job applies both patches to
+their pinned upstream versions and builds the patched binaries. The live
+dual-VPN acceptance run remains open.
 
 ## Desktop smoke test
 
