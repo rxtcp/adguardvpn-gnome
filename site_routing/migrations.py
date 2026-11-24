@@ -103,6 +103,13 @@ class MigrationManager:
     def _apply(self, state: dict, rule: dict, plan: dict, stage: str) -> None:
         if stage != 'rollback' and plan.get('exact_entries') is not True:
             raise ValueError('This plan predates exact saved-entry verification. Review a new diff or roll back the old plan.')
+        if stage == 'rollback':
+            if plan['stage'] not in ('protected', 'retired', 'failed', 'retiring', 'rolling-back'):
+                raise ValueError('There is no applied migration to roll back.')
+            if plan['stage'] == 'protected':
+                # Protect only recorded approval. No legacy settings or policies were changed.
+                self._finish_rollback(state, rule, plan)
+                return
         profiles = self._profiles(plan)
         target_key = Target.parse(rule['target']).key
         if stage == 'protect':
@@ -113,8 +120,6 @@ class MigrationManager:
         if stage == 'retire' and (plan['stage'] not in ('protected', 'retiring', 'failed', 'retired') or
                 not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key)):
             raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
-        if stage == 'rollback' and plan['stage'] not in ('protected', 'retired', 'failed', 'retiring', 'rolling-back'):
-            raise ValueError('There is no applied migration to roll back.')
         self.kernel.protect_subset(rule['addresses'], state['kernel'], state['installation_id'])
         plan['stage'] = 'retiring' if stage == 'retire' else 'rolling-back'
         self.store.save(state)  # Backups and transition intent survive a mid-update crash.
@@ -127,7 +132,7 @@ class MigrationManager:
                 expected = backup['after_hash'] if stage == 'retire' else backup['before_hash']
                 if current != expected:
                     self.reader.update(profile, backup['after'] if stage == 'retire' else backup['before'])
-            self.kernel.change_legacy(plan['overlaps'], 'del' if stage == 'retire' else 'add')
+            self._apply_legacy_changes(state, plan, stage)
             if stage == 'retire' and not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key):
                 raise ValueError('Replacement disappeared during legacy removal; guards and backup are retained. Retry or roll back.')
         except (OSError, RuntimeError, ValueError):
@@ -135,7 +140,30 @@ class MigrationManager:
             rule['migration_error'] = 'Migration failed; guards and the verified backup are retained. Retry or roll back.'
             self.store.save(state)
             raise
-        rule.pop('migration_error', None)
-        plan['stage'] = 'retired' if stage == 'retire' else 'rolled-back'
         if stage == 'rollback':
-            state['rules'].remove(rule)
+            self._finish_rollback(state, rule, plan)
+        else:
+            rule.pop('migration_error', None)
+            plan['stage'] = 'retired'
+
+    @staticmethod
+    def _finish_rollback(state: dict, rule: dict, plan: dict) -> None:
+        rule.pop('migration_error', None)
+        plan['stage'] = 'rolled-back'
+        state['rules'].remove(rule)
+
+    def _apply_legacy_changes(self, state: dict, plan: dict, stage: str) -> None:
+        removed = plan.setdefault('removed_overlaps', {})
+        overlaps = plan['overlaps']
+        if stage == 'retire':
+            for index, item in enumerate(overlaps):
+                binding = self.kernel.change_legacy(item, 'del')
+                if binding is not None:
+                    removed[str(index)] = binding
+                    self.store.save(state)
+            return
+        # Restore routes before the rules that can select them.
+        for index in sorted(removed, key=lambda index: overlaps[int(index)]['kind']):
+            self.kernel.change_legacy(overlaps[int(index)], 'add', binding=removed[index])
+            del removed[index]
+            self.store.save(state)

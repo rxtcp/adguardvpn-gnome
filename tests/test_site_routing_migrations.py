@@ -41,7 +41,9 @@ class MigrationTests(unittest.TestCase):
             def block(self, addresses, installation): self.events.append('block')
             def protect_subset(self, addresses, journal, installation): self.events.append('block')
             def verify_replacement(self, addresses, journal, target_key): return True
-            def change_legacy(self, entries, action): self.events.append(action)
+            def change_legacy(self, item, action, *, binding=None):
+                self.events.append(action)
+                return {'ifindex': 17, 'boot_id': 'fixture-boot'} if item['kind'] == 'route' else {}
         self.kernel, self.reader = Kernel(), Reader()
         self.manager = MigrationManager(self.store, self.reader, self.kernel)
 
@@ -63,12 +65,12 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(self.profile['settings'], original)
         self.assertEqual(len(self.manager.approved(self.state)), 2)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
-        self.assertEqual(self.kernel.events, ['block', 'del'])
+        self.assertEqual(self.kernel.events, ['block', 'del', 'del'])
         self.assertEqual(self.profile['settings']['ipv4']['route-data'], [{'dest': '203.0.113.0', 'prefix': 24}])
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
         self.assertEqual(self.profile['settings'], original)
         self.assertEqual(self.state['rules'], [])
-        self.assertEqual(self.kernel.events[-2:], ['block', 'add'])
+        self.assertEqual(self.kernel.events[-3:], ['block', 'add', 'add'])
 
     def test_changed_nm_settings_are_not_overwritten_by_a_stale_plan(self):
         plan = self.manager.preview(self.state, self.rule)
@@ -176,6 +178,48 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(self.kernel.events)
         self.manager.apply(self.state, self.rule, {'id': fallback['id'], 'stage': 'rollback'})
         self.assertEqual(self.state['migrations'][old['id']]['stage'], 'rolled-back')
+        self.assertEqual(self.state['rules'], [])
+        self.assertEqual(self.kernel.events, [])
+
+    def test_protected_rollback_succeeds_when_the_original_profile_is_gone(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        with patch.object(self.reader, 'profiles', return_value=[]):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
+        self.assertEqual(self.state['rules'], [])
+        self.assertFalse(self.kernel.events)
+
+    def test_partial_retirement_rolls_back_only_the_entries_it_removed(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        rule = self.kernel.overlaps([], {})[0]
+        with patch.object(self.kernel, 'change_legacy', side_effect=[{}, RuntimeError('Deletion failed')]):
+            with self.assertRaisesRegex(RuntimeError, 'Deletion failed'):
+                self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+
+        # Load the persisted journal as a new process would after partial retirement.
+        state = self.store.load()
+        with patch.object(self.kernel, 'change_legacy') as change:
+            self.manager.apply(state, state['rules'][0], {'id': plan['id'], 'stage': 'rollback'})
+        change.assert_called_once_with(rule, 'add', binding={})
+        self.assertEqual(state['rules'], [])
+
+    def test_already_absent_entries_and_old_unjournaled_retirement_are_not_recreated(self):
+        for persisted_receipts in (True, False):
+            with self.subTest(persisted_receipts=persisted_receipts):
+                self.state['rules'] = [self.rule]
+                plan = self.manager.preview(self.state, self.rule)
+                self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+                with patch.object(self.kernel, 'change_legacy', return_value=None):
+                    self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+                retired = self.state['migrations'][plan['id']]
+                if not persisted_receipts:
+                    retired.pop('removed_overlaps', None)
+                with patch.object(self.kernel, 'change_legacy') as change:
+                    self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback'})
+                change.assert_not_called()
+                self.assertEqual(self.state['rules'], [])
+                self.assertTrue(self.profile['settings']['ipv4']['routing-rules'])
 
     def test_check_keeps_older_rollback_when_no_profiles_can_supply_a_new_diff(self):
         old = self.manager.preview(self.state, self.rule)

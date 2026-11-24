@@ -142,6 +142,9 @@ automatically once NetworkManager confirms the replacement interface. **Check**
 reconciles approved routes and shows a timestamp,
 provider reason and the last migration refusal. Legacy retirement always
 rechecks the replacement and requires exact live matches for the saved entries.
+Rolling back a migration still at `protected` removes the Site Routing rule
+alone. Later rollback restores saved NetworkManager settings and replays only
+legacy kernel entries whose removal the service recorded.
 
 Rerunning the Site Routing installer restores known-address protection through
 the manager while keeping the early guard and NetworkManager running.

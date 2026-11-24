@@ -94,7 +94,9 @@ test('Check offers rollback for a retained migration when the fresh diff cannot 
     dialog.emit('response', 'rollback');
     await app.settle();
     app.dbusResponses.push({data: {}}, {data: {providers: [provider]}}, {data: {rules: []}});
-    app.actors.findLast(actor => !actor.destroyed && actor.responses?.has('confirm')).emit('response', 'confirm');
+    const confirmation = app.actors.findLast(actor => !actor.destroyed && actor.responses?.has('confirm'));
+    assert.match(confirmation.body, /leaves the legacy NetworkManager settings and policies as they are/);
+    confirmation.emit('response', 'confirm');
     await app.settle();
     assert.deepEqual(app.dbusCalls.find(call => call.request.migration)?.request.migration, {id, stage: 'rollback'});
     window.emit('close-request');

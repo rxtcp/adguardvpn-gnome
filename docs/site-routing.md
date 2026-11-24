@@ -177,9 +177,19 @@ An overlapping destination policy blocks application and requires review.
    `active`, and deletes only the reviewed entries. Only the migration's
    destinations are denied during that transaction; independent allow paths
    are preserved when their current kernel route can be reverified.
-4. **Roll back migration** restores only a matching before/after NM configuration
-   and the reviewed kernel objects, then removes the replacement rule. This
-   explicitly returns the hostname to its previous routing behavior.
+4. **Roll back migration** at `protected` removes the Site Routing replacement
+   and leaves legacy NetworkManager settings and kernel policies as they are.
+   After retirement has started, rollback restores the backed-up NetworkManager
+   profile settings if the current settings match the before or after snapshot.
+   It replays only kernel deletions the service successfully recorded before
+   removing the replacement. A removed route also requires the original kernel
+   interface index and boot ID. If the interface changed, review the live
+   NetworkManager connection and restore its policies before explicitly removing
+   the Site Routing rule. The daemon leaves protection in place on refusal.
+
+If a previous release or a crash left a kernel deletion without a record,
+recover that entry through the restored NetworkManager profile. Automatic
+rollback only replays recorded deletions.
 
 Retirement and rollback check the profile version during the write. If
 NetworkManager reports a concurrent edit or cannot provide a usable version,

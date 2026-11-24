@@ -74,7 +74,9 @@ export class RoutingController {
 
     async migrate(rule: RoutingRule, plan: MigrationPlan, stage: MigrationStage): Promise<void> {
         const explanation = stage === 'rollback'
-            ? 'Restore the verified NM backup and remove this replacement rule. This returns the host to its previous system routing.'
+            ? plan.stage === 'protected'
+                ? 'Remove this Site Routing replacement. This leaves the legacy NetworkManager settings and policies as they are.'
+                : 'Restore the verified NM backup and recorded removals, then remove this Site Routing replacement.'
             : stage === 'retire'
                 ? 'Remove only the listed legacy NM entries after verifying the protected replacement. A private backup is retained.'
                 : 'Install and verify a guarded replacement. Existing NM entries are retained until a separate confirmation.';

@@ -1,10 +1,14 @@
 """Guard-first policy routing with terminal unreachable rules and owned cleanup."""
+from pathlib import Path
+
 from .firewall import Firewall
 from .kernel_objects import OwnedObject, table_number
 from .kernel_plan import prepare_policy
 from .kernel_changes import apply_objects
 from .policy_inspection import foreign_overlaps
 from .legacy_objects import legacy_arguments
+
+BOOT_ID_PATH = Path('/proc/sys/kernel/random/boot_id')
 
 
 class KernelBackend:
@@ -103,10 +107,24 @@ class KernelBackend:
         return bool(addresses) and all(any(item.address == address and item.table == expected_table
             and self._confirmed(item) for item in routes) for address in addresses)
 
-    def change_legacy(self, entries: list[dict], action: str) -> None:
-        for item in entries:
-            arguments = legacy_arguments(item, action)
-            rows = self.runner.read_ip(item['family'], item['kind'], 'show', *(['table', 'all'] if item['kind'] == 'route' else []))
-            present = item['data'] in rows
-            if (action == 'del' and present) or (action == 'add' and not present):
-                self.runner.write_ip(item['family'], *arguments)
+    def _legacy_route_binding(self, item: dict) -> dict:
+        interface = item['data']['dev']
+        indices = [link['ifindex'] for link in self.runner.read_links() if link['ifname'] == interface]
+        if len(indices) != 1 or indices[0] <= 0:
+            raise RuntimeError('The legacy route interface identity cannot be verified.')
+        return {'ifindex': indices[0], 'boot_id': BOOT_ID_PATH.read_text(encoding='ascii').strip()}
+
+    def change_legacy(self, item: dict, action: str, *, binding: dict | None = None) -> dict | None:
+        arguments = legacy_arguments(item, action)
+        route = item['kind'] == 'route'
+        rows = self.runner.read_ip(item['family'], item['kind'], 'show', *(['table', 'all'] if route else []))
+        present = item['data'] in rows
+        if action == 'del' and not present:
+            return None
+        current = self._legacy_route_binding(item) if route else {}
+        if route and action == 'add' and current != binding:
+            raise RuntimeError('The legacy route interface identity changed. Review the NetworkManager connection before removing protection.')
+        if action == 'add' and present:
+            return None
+        self.runner.write_ip(item['family'], *arguments)
+        return current

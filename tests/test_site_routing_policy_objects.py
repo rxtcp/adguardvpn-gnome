@@ -1,7 +1,7 @@
 """Ownership and migration must never grant permission over unrelated policy."""
 import copy
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from site_routing.firewall import Firewall, guard_script
 from site_routing.kernel import KernelBackend
@@ -123,11 +123,44 @@ class PolicyOwnershipTests(unittest.TestCase):
         runner.current[4]['rule'].append(copy.deepcopy(row))
         entries = backend.overlaps(['198.51.100.8'], {'objects': []})
         self.assertEqual(entries, [{'kind': 'rule', 'family': 4, 'data': row}])
-        backend.change_legacy(entries, 'del'); backend.change_legacy(entries, 'del')
+        item = entries[0]
+        self.assertEqual(backend.change_legacy(item, 'del'), {})
+        self.assertIsNone(backend.change_legacy(item, 'del'))
         self.assertNotIn(row, runner.current[4]['rule'])
-        backend.change_legacy(entries, 'add'); backend.change_legacy(entries, 'add')
+        backend.change_legacy(item, 'add'); backend.change_legacy(item, 'add')
         self.assertEqual(runner.current[4]['rule'].count(row), 1)
         self.assertIn({'priority': 1000, 'table': 880}, runner.current[4]['rule'])
+
+    def test_legacy_route_restore_requires_the_same_kernel_interface_and_boot(self):
+        runner = KernelFixture(); backend = KernelBackend(runner)
+        row = {'dst': '198.51.100.8/32', 'table': 777, 'dev': PATH4.interface,
+               'prefsrc': PATH4.source, 'protocol': 'static'}
+        item = {'kind': 'route', 'family': 4, 'data': row}
+        runner.current[4]['route'].append(row)
+        runner.read_links = Mock(return_value=[{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex}])
+        with patch('site_routing.kernel.BOOT_ID_PATH') as boot_id:
+            boot_id.read_text.return_value = 'original boot\n'
+            binding = backend.change_legacy(item, 'del')
+            self.assertNotIn(row, runner.current[4]['route'])
+
+            runner.read_links.return_value = []
+            with self.assertRaisesRegex(RuntimeError, 'interface identity'):
+                backend.change_legacy(item, 'add', binding=binding)
+            runner.read_links.return_value = [{'ifname': PATH4.interface, 'ifindex': 0}]
+            with self.assertRaisesRegex(RuntimeError, 'interface identity'):
+                backend.change_legacy(item, 'add', binding=binding)
+            runner.read_links.return_value = [{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex + 1}]
+            with self.assertRaisesRegex(RuntimeError, 'interface identity'):
+                backend.change_legacy(item, 'add', binding=binding)
+            runner.read_links.return_value = [{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex}]
+            boot_id.read_text.return_value = 'new boot\n'
+            with self.assertRaisesRegex(RuntimeError, 'interface identity'):
+                backend.change_legacy(item, 'add', binding=binding)
+            self.assertFalse(runner.current[4]['route'])
+
+            boot_id.read_text.return_value = 'original boot\n'
+            backend.change_legacy(item, 'add', binding=binding)
+            self.assertIn(row, runner.current[4]['route'])
 
 
 class LegacyArgumentTests(unittest.TestCase):

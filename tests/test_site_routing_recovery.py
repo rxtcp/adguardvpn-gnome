@@ -166,6 +166,41 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.assertNotIn(legacy, self.runner.current[4]['rule'])
         self.assertEqual(set(self.statuses().values()), {'active'})
 
+    def test_protected_rollback_never_adds_a_route_to_a_tunnel_that_reused_the_name(self):
+        legacy = {'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static',
+                  'dev': PATH4.interface, 'prefsrc': PATH4.source}
+        self.runner.current[4]['route'].append(legacy)
+        settings = {'ipv4': {'route-data': [{'dest': '198.51.100.8', 'prefix': 32,
+                                            'table': 777, 'src': PATH4.source}]}}
+        profile = {'uuid': TARGET['id'], 'name': 'Fixture VPN', 'users': (), 'interfaces': [PATH4.interface],
+                   'settings': settings, 'serialized': json.dumps(settings)}
+        reader = Mock()
+        reader.profiles.return_value = reader.migration_profiles.return_value = [profile]
+        alternate = {'ipv4': {'route-data': []}}
+        reader.render_without.return_value = json.dumps(alternate), alternate
+        self.manager.migrations = MigrationManager(self.store, reader, self.kernel)
+        rule = self.add('one.example')
+        plan = self.manager.diagnose(rule['id'], 1000)['migration']
+        request = {'operation': 'update-rule', 'id': rule['id'], 'domain': rule['domain'], 'target': TARGET,
+                   'migration': {'id': plan['id'], 'stage': 'protect'}}
+        self.manager.handle(request, 1000, 'fixtureuser')
+
+        self.runner.current[4]['route'].clear()
+        self.runner.path = NetworkPath(PATH4.interface, PATH4.ifindex + 1, PATH4.source)
+        self.registry.providers[0] = Provider(Target.parse(TARGET), 'Disconnected original VPN')
+        diagnosis = self.manager.diagnose(rule['id'], 1000)
+        self.assertEqual(diagnosis['rule']['status'], 'blocked-offline')
+        self.assertEqual(diagnosis['migration']['stage'], 'protected')
+        self.runner.events.clear()
+
+        request['migration']['stage'] = 'rollback'
+        self.manager.handle(request, 1000, 'fixtureuser')
+        self.assertEqual(self.manager.rules(1000), [])
+        self.assertEqual(self.store.state['kernel']['known'], [])
+        self.assertNotIn(legacy, self.runner.current[4]['route'])
+        self.assertFalse(any(event[0] == 'ip' and event[2][:2] == ('route', 'add') for event in self.runner.events))
+        reader.update.assert_not_called()
+
     def test_transitions_include_domain_target_and_stage_without_logging_each_unchanged_poll(self):
         self.add('one.example')
         self.registry.providers[0] = Provider(Target.parse(TARGET), 'Fixture VPN', detail='NetworkManager activated, but no verified kernel tunnel.')
