@@ -186,8 +186,10 @@ NetworkManager reports a concurrent edit or cannot provide a usable version,
 the migration refuses the write. For an older plan still at `protected`, use
 **Check** to prepare a new diff. The assignment and known addresses stay in
 place, and **Install protected replacement** can authorize the new diff after
-review. Plans that may already have changed NM settings retain their rollback
-path. Partial failure retains the backup and guards and offers retry/rollback. A missing
+review. If Check cannot produce a verified diff, it shows the reason and keeps
+**Roll back migration** available for the saved plan. Plans that may already
+have changed NM settings retain their rollback path. Partial failure retains
+the backup and guards and offers retry/rollback. A missing
 profile requires administrator review; the service does not invent a replacement
 profile. Reassignment is a separate operation. Changing or removing the saved
 assignment invalidates its overlap approval while preserving the backup. No
@@ -251,9 +253,13 @@ script stops and retains the guards and service files. Review the failure and
 restart `adguardvpn-site-routing.service` for recovery; do not delete the journal
 or flush firewall/routing tables to bypass the refusal.
 
-After successful removal, the journal, previous state and migration backups
-remain in the private directory `/var/lib/adguardvpn-site-routing`. If no longer
-needed, permanently remove them:
+After successful removal, follow the README's
+[stock Fedora NetworkManager package restoration](../README.md#restore-stock-fedora-networkmanager-packages)
+if you installed the `InterfaceIndex` rebuild.
+
+The journal, previous state and migration backups remain in the private
+directory `/var/lib/adguardvpn-site-routing`. If no longer needed, permanently
+remove them:
 
 ```bash
 sudo rm -rf -- /var/lib/adguardvpn-site-routing

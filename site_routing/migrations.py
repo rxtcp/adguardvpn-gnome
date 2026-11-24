@@ -7,8 +7,10 @@ from .migration_matching import matches_entry
 from .models import Target
 
 
-def public_plan(plan: dict) -> dict:
-    return {'id': plan['id'], 'stage': plan['stage'], 'changes': list(plan['changes']), 'detail': plan.get('last_error', '')}
+def public_plan(plan: dict, *, detail: str | None = None) -> dict:
+    return {'id': plan['id'], 'stage': plan['stage'], 'changes': list(plan['changes']),
+            'detail': plan.get('last_error', '') if detail is None else detail[:2048],
+            'rollback_only': plan.get('exact_entries') is not True}
 
 
 def can_refresh_preview(plan: dict) -> bool:
@@ -20,10 +22,22 @@ class MigrationManager:
         self.store, self.reader, self.kernel = store, reader, kernel
 
     def preview(self, state: dict, rule: dict) -> dict | None:
-        existing = [plan for plan in state['migrations'].values() if plan['rule_id'] == rule['id']
-                    and plan['stage'] != 'rolled-back' and not can_refresh_preview(plan)]
+        plans = [plan for plan in state['migrations'].values() if plan['rule_id'] == rule['id']]
+        existing = [plan for plan in plans if plan['stage'] != 'rolled-back' and not can_refresh_preview(plan)]
         if existing:
             return public_plan(existing[-1])
+        previous = next((plan for plan in reversed(plans) if plan['stage'] == 'protected'), None)
+        try:
+            preview = self._create_preview(state, rule)
+        except (OSError, RuntimeError, ValueError) as error:
+            if previous is None:
+                raise
+            return public_plan(previous, detail=f'Migration preview unavailable. {error}')
+        if preview is None and previous is not None:
+            return public_plan(previous, detail='No eligible legacy NetworkManager entries were found for a new preview.')
+        return preview
+
+    def _create_preview(self, state: dict, rule: dict) -> dict | None:
         profiles, changes, matched = [], [], {}
         overlaps = self.kernel.overlaps(rule['addresses'], state['kernel'])
         for profile in self.reader.migration_profiles():

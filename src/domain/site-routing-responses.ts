@@ -74,7 +74,8 @@ export function diagnostics(value: unknown): RoutingDiagnostics {
     if (item.migration !== null) {
         const plan = record(item.migration);
         migration = {id: identity(plan.id), stage: text(plan.stage, 32), changes: list(plan.changes, entry => text(entry), 4096),
-            detail: plan.detail === undefined ? '' : text(plan.detail)};
+            detail: plan.detail === undefined ? '' : text(plan.detail),
+            rollback_only: plan.rollback_only === undefined ? false : boolean(plan.rollback_only)};
     }
     return {rule: rule(item.rule), addresses: list(item.addresses, address => text(address, 45), 256),
         routes: list(item.routes, route, 256), protection: text(item.protection), migration,

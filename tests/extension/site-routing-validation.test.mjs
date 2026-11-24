@@ -27,7 +27,8 @@ test('typed responses reject every unsafe field class and accept all provider id
         assert.throws(() => parse.diagnostics({...diagnosis, routes: [{address: '198.51.100.8', ...replacement}]}));
     assert.equal(parse.diagnostics({...diagnosis, routes: [], checked_at: null, provider: null}).checked_at, null);
     for (const replacement of [{checked_at: -1}, {checked_at: 'now'}, {provider: {active: true}},
-        {migration: {id, stage: 'protected', changes: [], detail: 7}}])
+        {migration: {id, stage: 'protected', changes: [], detail: 7}},
+        {migration: {id, stage: 'protected', changes: [], rollback_only: 'true'}}])
         assert.throws(() => parse.diagnostics({...diagnosis, routes: [], ...replacement}));
 });
 

@@ -25,6 +25,7 @@ export interface MigrationPlan {
     stage: string;
     changes: string[];
     detail: string;
+    rollback_only: boolean;
 }
 export interface RoutingDiagnostics {
     rule: RoutingRule;

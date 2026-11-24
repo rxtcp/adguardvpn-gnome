@@ -184,6 +184,23 @@ The uninstaller removes and reloads the NetworkManager drop-in before stopping
 the early guard. Private state/backups at `/var/lib/adguardvpn-site-routing` are retained.
 See [the full removal procedure](docs/site-routing.md#uninstall-and-retained-data).
 
+#### Restore stock Fedora NetworkManager packages
+
+If you installed the `InterfaceIndex` rebuild, the Site Routing uninstaller
+leaves those RPMs installed. After successful Site Routing removal, restore
+`NetworkManager`, `NetworkManager-libnm` and the other installed subpackages from
+the rebuilt `NetworkManager` source RPM, such as `NetworkManager-wifi`. Use
+matching stock builds for your Fedora release and architecture in one
+transaction.
+
+Disable the repository supplying the custom build if you used one. From the
+local console during a maintenance window, pass the full list of affected
+package names to `sudo dnf reinstall` if Fedora provides the installed versions
+and releases, or to `sudo dnf distro-sync` if the stock build differs. Review
+the transaction before accepting it, then restart NetworkManager or reboot.
+See [DNF reinstall](https://dnf5.readthedocs.io/en/latest/commands/reinstall.8.html)
+and [DNF distro-sync](https://dnf5.readthedocs.io/en/latest/commands/distro-sync.8.html).
+
 ### Remove both the extension and passwordless helper
 
 1. Disable the extension as your normal desktop user. This stops its background

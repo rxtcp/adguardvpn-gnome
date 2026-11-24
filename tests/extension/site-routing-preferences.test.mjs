@@ -79,6 +79,27 @@ test('Check shows a synchronized provider snapshot and the reason legacy retirem
     window.emit('close-request');
 });
 
+test('Check offers rollback for a retained migration when the fresh diff cannot be verified', async () => {
+    const {app, window} = await preferences([rule]);
+    const id = '00000000-0000-4000-8000-000000000009';
+    const failure = 'Migration preview unavailable. The saved policy entry cannot be matched exactly.';
+    app.dbusResponses.push({data: {rule, addresses: ['198.51.100.8'], routes: [], protection: 'Known IPs only',
+        migration: {id, stage: 'protected', changes: ['saved fixture route'], detail: failure, rollback_only: true}}},
+        {data: {providers: [provider]}}, {data: {rules: [rule]}});
+    await app.press('Check rule for one.example');
+    const dialog = app.actors.findLast(actor => !actor.destroyed && actor.responses?.has('close'));
+    assert.deepEqual([...dialog.responses.keys()], ['close', 'rollback']);
+    assert.ok(app.actors.some(actor => actor.text?.includes?.(failure) && actor.text.includes('Saved migration entries')));
+    assert.equal(app.dbusCalls.filter(call => call.request.operation === 'update-rule').length, 0);
+    dialog.emit('response', 'rollback');
+    await app.settle();
+    app.dbusResponses.push({data: {}}, {data: {providers: [provider]}}, {data: {rules: []}});
+    app.actors.findLast(actor => !actor.destroyed && actor.responses?.has('confirm')).emit('response', 'confirm');
+    await app.settle();
+    assert.deepEqual(app.dbusCalls.find(call => call.request.migration)?.request.migration, {id, stage: 'rollback'});
+    window.emit('close-request');
+});
+
 test('editing preserves the host and stable provider selection through rename and removal', async () => {
     const {app, window} = await preferences([rule]);
     const entry = app.actors.find(actor => actor.title === 'URL or exact domain');

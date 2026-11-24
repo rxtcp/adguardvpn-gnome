@@ -35,19 +35,22 @@ export function showDiagnostics(window: Adw.PreferencesWindow, diagnosis: Routin
     const checked = diagnosis.checked_at ? new Date(diagnosis.checked_at * 1000).toLocaleString() : 'Unavailable from this service version';
     const providerState = provider ? `${provider.name}: ${provider.active ? 'verified paths available' : 'no verified path'}. ${provider.detail}`
         : `Provider unavailable: ${diagnosis.rule.target.kind}:${diagnosis.rule.target.id}`;
+    const migrationHeading = plan?.rollback_only ? 'Saved migration entries' : 'Exact migration diff';
     const text = [`Checked at: ${checked}`, providerState, diagnosis.protection, `Known addresses:\n${diagnosis.addresses.join('\n')}`,
         `Observed kernel routes:\n${diagnosis.routes.map(route => JSON.stringify(route)).join('\n')}`,
-        plan ? `Migration: ${plan.stage}\n${plan.detail || 'No migration error recorded.'}\nExact migration diff:\n${plan.changes.join('\n')}`
+        plan ? `Migration: ${plan.stage}\n${plan.detail || 'No migration error recorded.'}\n${migrationHeading}:\n${plan.changes.join('\n')}`
             : 'No eligible legacy NM entries were found.'].join('\n\n');
     const dialog = new Adw.MessageDialog({transient_for: window, modal: true,
         heading: diagnosis.rule.domain, body: diagnosis.rule.detail, body_use_markup: false,
         extra_child: details(text)});
     dialog.add_response('close', 'Close');
     dialog.set_close_response('close');
-    if (plan?.stage === 'preview')
-        dialog.add_response('protect', 'Install protected replacement');
-    if (plan && ['protected', 'failed', 'retiring'].includes(plan.stage))
-        dialog.add_response('retire', 'Remove listed legacy entries');
+    if (plan && !plan.rollback_only) {
+        if (plan.stage === 'preview')
+            dialog.add_response('protect', 'Install protected replacement');
+        if (['protected', 'failed', 'retiring'].includes(plan.stage))
+            dialog.add_response('retire', 'Remove listed legacy entries');
+    }
     if (plan && plan.stage !== 'preview' && plan.stage !== 'rolled-back')
         dialog.add_response('rollback', 'Roll back migration');
     dialog.connect('response', (_dialog, response) => {
