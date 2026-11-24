@@ -150,6 +150,18 @@ class RoutingRecoveryTests(unittest.TestCase):
                                            if line.startswith('set allowed4')][0])
 
         saved = self.store.load()
+        del saved['migrations'][plan_id]['pending_overlap']
+        for stage in ('retiring', 'rolling-back', 'failed'):
+            with self.subTest(stage=stage):
+                saved['migrations'][plan_id]['stage'] = stage
+                self.store.save(saved)
+                restarted.refresh()
+                self.assertEqual(restarted.rules(1000)[0]['status'], 'apply-error')
+                allowed = next(line for line in self.runner.events[-1][1].splitlines() if line.startswith('set allowed4'))
+                self.assertNotIn('198.51.100.8 .', allowed)
+                self.assertIn('198.51.100.9 . 17', allowed)
+
+        saved = self.store.load()
         saved['migrations'][plan_id]['pending_overlap'] = None
         saved['migrations'][plan_id]['stage'] = 'retired'
         self.store.save(saved)

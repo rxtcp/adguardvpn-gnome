@@ -110,28 +110,34 @@ class KernelBackend:
         return bool(addresses) and all(any(item.address == address and item.table == expected_table
             and self._confirmed(item) for item in routes) for address in addresses)
 
-    def _legacy_route_binding(self, item: dict) -> dict:
+    def _restoration_index(self, item: dict) -> int:
         interface = item['data']['dev']
         indices = [link['ifindex'] for link in self.runner.read_links() if link['ifname'] == interface]
         if len(indices) != 1 or indices[0] <= 0:
             raise RuntimeError('The legacy route interface identity cannot be verified.')
-        return {'ifindex': indices[0], 'boot_id': BOOT_ID_PATH.read_text(encoding='ascii').strip()}
+        return indices[0]
 
-    def _legacy_present(self, item: dict) -> bool:
-        arguments = ('route', 'show', 'table', 'all') if item['kind'] == 'route' else ('rule', 'show')
-        return item['data'] in self.runner.read_ip(item['family'], *arguments)
+    @staticmethod
+    def _route_binding(index: int) -> dict:
+        return {'ifindex': index, 'boot_id': BOOT_ID_PATH.read_text(encoding='ascii').strip()}
+
+    def _legacy_rule_present(self, item: dict) -> bool:
+        return item['data'] in self.runner.read_ip(item['family'], 'rule', 'show')
 
     def legacy_present(self, item: dict, *, binding: dict | None = None) -> bool:
-        return self._legacy_present(item) and (binding is None or item['kind'] == 'rule' or
-                                              self._legacy_route_binding(item) == binding)
+        if item['kind'] == 'rule':
+            return self._legacy_rule_present(item)
+        index = self.runner.legacy_route_index(item)
+        return index is not None and (binding is None or self._route_binding(index) == binding)
 
     def change_legacy(self, item: dict, action: str, *, binding: dict | None = None, before_delete=None) -> dict | None:
         arguments = legacy_arguments(item, action)
         route = item['kind'] == 'route'
-        present = self._legacy_present(item)
+        index = self.runner.legacy_route_index(item) if route else None
+        present = index is not None if route else self._legacy_rule_present(item)
         if action == 'del' and not present:
             return None
-        current = self._legacy_route_binding(item) if route else {}
+        current = self._route_binding(index if index is not None else self._restoration_index(item)) if route else {}
         if route and action == 'add' and current != binding:
             raise RuntimeError('The legacy route interface identity changed. Review the NetworkManager connection before removing protection.')
         if action == 'add' and present:

@@ -13,6 +13,8 @@ def migration_blocks(state: dict) -> dict[str, str]:
     for plan in state['migrations'].values():
         if plan.get('pending_overlap') is not None:
             blocked.setdefault(plan['rule_id'], 'A legacy deletion is unresolved. Known IPs stay blocked until recovery.')
+        elif plan['stage'] in ('retiring', 'rolling-back', 'failed'):
+            blocked.setdefault(plan['rule_id'], 'Migration is incomplete. Known IPs stay blocked until recovery.')
     return blocked
 
 

@@ -189,10 +189,12 @@ An overlapping destination policy blocks application and requires review.
    the Site Routing rule. The daemon leaves protection in place on refusal.
 
 The service saves its intent before each kernel deletion and records completion
-after the kernel accepts it. It uses the verified kernel interface index for
-both legacy route deletion and restoration. If a crash or an older journal
-leaves the outcome uncertain, background reconciliation keeps the affected
-addresses blocked, including those shared with another rule. An independently
+after the kernel accepts it. For deletion, the service takes the interface
+index from the same kernel record it matches against the reviewed route. It
+uses the recorded index for restoration after checking the current interface.
+If a crash or an older unfinished journal leaves the outcome uncertain,
+background reconciliation keeps the affected addresses blocked, including
+those shared with another rule. An independently
 verified rule continues to work. Restore the exact policy through the
 recovered NetworkManager profile, use **Check**, and confirm rollback again.
 The confirmation applies to the stage shown in **Check**. If another client

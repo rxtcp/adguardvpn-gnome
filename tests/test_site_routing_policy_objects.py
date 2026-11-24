@@ -144,6 +144,8 @@ class PolicyOwnershipTests(unittest.TestCase):
                'prefsrc': PATH4.source, 'protocol': 'static'}
         item = {'kind': 'route', 'family': 4, 'data': row}
         runner.current[4]['route'].append(row)
+        runner.legacy_route_index = Mock(side_effect=lambda item:
+            PATH4.ifindex if item['data'] in runner.current[item['family']]['route'] else None)
         runner.read_links = Mock(return_value=[{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex}])
         runner.change_legacy_route = Mock(side_effect=lambda item, action, _index:
             runner.write_ip(item['family'], *legacy_arguments(item, action)))
@@ -154,6 +156,7 @@ class PolicyOwnershipTests(unittest.TestCase):
             self.assertFalse(backend.legacy_present(item, binding={'ifindex': PATH4.ifindex + 1, 'boot_id': 'original boot'}))
             binding = backend.change_legacy(item, 'del')
             self.assertNotIn(row, runner.current[4]['route'])
+            self.assertFalse(backend.legacy_present(item, binding=binding))
 
             runner.read_links.return_value = []
             with self.assertRaisesRegex(RuntimeError, 'interface identity'):
@@ -183,7 +186,8 @@ class PolicyOwnershipTests(unittest.TestCase):
                'prefsrc': PATH4.source, 'protocol': 'static'}
         item = {'kind': 'route', 'family': 4, 'data': row}
         runner.current[4]['route'].append(row)
-        runner.read_links = Mock(return_value=[{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex}])
+        runner.legacy_route_index = Mock(return_value=PATH4.ifindex)
+        runner.read_links = Mock(return_value=[{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex + 10}])
         runner.change_legacy_route = Mock()
 
         def reuse_name(binding):
@@ -192,6 +196,7 @@ class PolicyOwnershipTests(unittest.TestCase):
 
         binding = backend.change_legacy(item, 'del', before_delete=reuse_name)
         self.assertEqual(binding['ifindex'], PATH4.ifindex)
+        runner.read_links.assert_not_called()
         runner.change_legacy_route.assert_called_once_with(item, 'del', PATH4.ifindex)
         self.assertEqual(runner.events, [])
 

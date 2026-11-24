@@ -106,6 +106,36 @@ class NamespaceRoutingTests(unittest.TestCase):
             backend.change_legacy(item, 'del', before_delete=reuse_name)
         self.assertEqual(legacy_routes(), [row])
 
+    def test_legacy_route_index_survives_name_reuse_between_dump_and_interface_check(self):
+        self.command('link', 'set', 'lo', 'up')
+        original, _ = self.tunnel()
+        runner = CommandRunner()
+        backend = KernelBackend(runner)
+        route_args = ('-4', 'route', 'add', '198.51.100.8/32', 'table', '777',
+                      'dev', original.interface, 'proto', 'static', 'metric', '20')
+        self.command(*route_args)
+
+        def legacy_routes():
+            return [row for row in runner.read_ip(4, 'route', 'show', 'table', 'all') if row.get('table') == 777]
+
+        row = legacy_routes()[0]
+        item = {'kind': 'route', 'family': 4, 'data': row}
+        original_name = socket.if_indextoname
+
+        def reuse_name(index):
+            self.assertEqual(index, original.ifindex)
+            self.command('link', 'del', original.interface)
+            unrelated, _ = self.tunnel(name=original.interface)
+            self.assertNotEqual(unrelated.ifindex, index)
+            self.command(*route_args)
+            return original_name(index)
+
+        with patch('site_routing.route_netlink.socket.if_indextoname', side_effect=reuse_name) as name:
+            with self.assertRaises(OSError):
+                backend.change_legacy(item, 'del', before_delete=lambda _: self.fail('no deletion was verified'))
+        name.assert_called_once_with(original.ifindex)
+        self.assertEqual(legacy_routes(), [row])
+
     def test_independent_conflict_and_real_device_loss_recover_without_releasing_known_ips(self):
         self.command('link', 'set', 'lo', 'up')
         corporate, _corporate6 = self.tunnel()

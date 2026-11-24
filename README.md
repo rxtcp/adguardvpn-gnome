@@ -147,8 +147,9 @@ alone. Later rollback restores saved NetworkManager settings and replays only
 legacy kernel entries whose removal the service recorded. If interrupted removal
 leaves an uncertain outcome, restore the exact legacy policy through NetworkManager
 before retrying rollback. Site Routing keeps the affected addresses blocked
-across service restarts until recovery is verified. Legacy route deletion and
-restoration both use the verified kernel interface index.
+across service restarts until recovery is verified, including with older
+unfinished migration journals. Legacy route deletion takes the interface index
+from the same kernel record it matches against the reviewed route.
 
 Rerunning the Site Routing installer restores known-address protection through
 the manager while keeping the early guard and NetworkManager running.
