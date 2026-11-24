@@ -79,6 +79,10 @@ services and starts them. It does not restart NetworkManager, connect a VPN or
 change routes for an empty configuration. The extension installer alone does
 not install this system component.
 
+To retain AdGuard TUN/AUTO with a NetworkManager OpenVPN connection, use the
+[optional marked launcher and approved uplink setup](vpn-underlay-prerequisite.md#marked-openvpn-transport-with-tunauto).
+The ordinary installer does not patch distribution packages or opt a profile in.
+
 Open **Site Routing…** in the toggle's menu, or run:
 
 ```bash
@@ -190,6 +194,10 @@ private journal, stops only its manager and restores guards before restarting
 that manager. AdGuard authentication remains a separate helper procedure.
 
 ## Uninstall and retained data
+
+If marked TUN/AUTO was enabled, complete its
+[rollback](vpn-underlay-prerequisite.md#roll-back-tunauto-integration) before
+uninstalling Site Routing.
 
 If removing all components, remove Site Routing **before** the protected helper
 and extension. Disabling or uninstalling the extension alone leaves its system

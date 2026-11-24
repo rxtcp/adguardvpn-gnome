@@ -1,0 +1,77 @@
+--- a/src/openvpn/options.c
++++ b/src/openvpn/options.c
+@@ -105,6 +105,9 @@
+ #endif
+ #endif
+     " [AEAD]"
++#if defined(TARGET_LINUX) && HAVE_DECL_SO_MARK && defined(HAVE_LIBCAPNG)
++    " [SiteRouting-SO_MARK]"
++#endif
+ #ifdef ENABLE_DCO
+     " [DCO]"
+ #endif
+@@ -6680,7 +6683,7 @@
+ #ifdef TARGET_LINUX
+     else if (streq(p[0], "bind-dev") && p[1])
+     {
+-        VERIFY_PERMISSION(OPT_P_SOCKFLAGS);
++        VERIFY_PERMISSION(options->mark == SITE_ROUTING_MARK ? OPT_P_GENERAL : OPT_P_SOCKFLAGS);
+         options->bind_dev = p[1];
+     }
+ #endif
+--- a/src/openvpn/options.h
++++ b/src/openvpn/options.h
+@@ -29,6 +29,9 @@
+ #ifndef OPTIONS_H
+ #define OPTIONS_H
+ 
++/* Reserved by the administrator-approved Site Routing transport. */
++#define SITE_ROUTING_MARK 0x53495445
++
+ #include "basic.h"
+ #include "common.h"
+ #include "mtu.h"
+--- a/src/openvpn/platform.c
++++ b/src/openvpn/platform.c
+@@ -188,6 +188,14 @@
+         return -1;
+     }
+ 
++#ifdef TARGET_LINUX
++    if (c->options.mark == SITE_ROUTING_MARK)
++    {
++        /* Recreated sockets still need SO_MARK and SO_BINDTODEVICE. */
++        return 1;
++    }
++#endif
++
+     if (dco_enabled(&c->options))
+     {
+ #ifdef TARGET_LINUX
+--- a/src/openvpn/socket.c
++++ b/src/openvpn/socket.c
+@@ -947,7 +947,13 @@
+ #if defined(TARGET_LINUX) && HAVE_DECL_SO_MARK
+     if (mark && setsockopt(sd, SOL_SOCKET, SO_MARK, (void *) &mark, sizeof(mark)) != 0)
+     {
+-        msg(M_WARN, "NOTE: setsockopt SO_MARK=%d failed", mark);
++        msg((mark == SITE_ROUTING_MARK ? M_FATAL : M_WARN) | M_ERRNO,
++            "setsockopt SO_MARK=%d failed", mark);
++    }
++#elif defined(TARGET_LINUX)
++    if (mark == SITE_ROUTING_MARK)
++    {
++        msg(M_FATAL, "Site Routing requires SO_MARK support");
+     }
+ #endif
+ }
+@@ -1148,7 +1154,8 @@
+         msg(M_INFO, "Using bind-dev %s", sock->bind_dev);
+         if (setsockopt(sock->sd, SOL_SOCKET, SO_BINDTODEVICE, sock->bind_dev, strlen(sock->bind_dev) + 1) != 0)
+         {
+-            msg(M_WARN|M_ERRNO, "WARN: setsockopt SO_BINDTODEVICE=%s failed", sock->bind_dev);
++            msg((sock->mark == SITE_ROUTING_MARK ? M_FATAL : M_WARN) | M_ERRNO,
++                "setsockopt SO_BINDTODEVICE=%s failed", sock->bind_dev);
+         }
+ 
+     }

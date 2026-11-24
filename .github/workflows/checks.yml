@@ -51,3 +51,37 @@ jobs:
         run: |
           parent_namespace="$(readlink /proc/self/ns/net)"
           sudo env SITE_ROUTING_PARENT_NETNS="$parent_namespace" unshare --net /usr/bin/python3 -m unittest discover -s tests -p site_routing_namespace.py -v
+
+  openvpn-adapter:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install adapter build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake autopoint gettext libtool libglib2.0-dev libnm-dev \
+            libcap-ng-dev liblz4-dev liblzo2-dev libssl-dev
+      - name: Build the two patched OpenVPN components
+        run: |
+          mkdir -p .tmp/upstream
+          curl -fsSL https://codeload.github.com/NetworkManager/NetworkManager-openvpn/tar.gz/refs/tags/1.12.0 \
+            | tar -xz -C .tmp/upstream
+          curl -fsSL https://codeload.github.com/OpenVPN/openvpn/tar.gz/refs/tags/v2.6.14 \
+            | tar -xz -C .tmp/upstream
+          patch -d .tmp/upstream/NetworkManager-openvpn-1.12.0 -p1 < packaging/NetworkManager-openvpn-1.12.0-site-routing.patch
+          patch -d .tmp/upstream/openvpn-2.6.14 -p1 < packaging/openvpn-2.6.14-site-routing.patch
+          (
+            cd .tmp/upstream/NetworkManager-openvpn-1.12.0
+            autoreconf -fi
+            ./configure --without-gnome
+            make -j2 src/nm-openvpn-service
+          )
+          (
+            cd .tmp/upstream/openvpn-2.6.14
+            autoreconf -fi
+            ./configure --disable-dco --disable-plugin-auth-pam --disable-plugin-down-root
+            make -j2
+            src/openvpn/openvpn --version > version.txt
+            grep -F '[SiteRouting-SO_MARK]' version.txt
+          )

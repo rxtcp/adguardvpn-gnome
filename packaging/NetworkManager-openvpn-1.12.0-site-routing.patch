@@ -1,0 +1,64 @@
+--- a/src/nm-openvpn-service.c
++++ b/src/nm-openvpn-service.c
+@@ -1323,6 +1323,52 @@
+ }
+ 
+ static gboolean
++add_site_routing_underlay_args (GPtrArray *args, const char *openvpn_binary, NMConnection *connection,
++                                NMSettingVpn *s_vpn, GError **error)
++{
++	const char *configuration = "/etc/adguardvpn-site-routing/openvpn-underlay.json";
++	const char *uuid = nm_connection_get_uuid (connection);
++	char *command[] = { "/usr/bin/python3", "-I", "-B",
++	                   "/usr/libexec/adguardvpn-site-routing/launch.py",
++	                   "openvpn-underlay", (char *) uuid, NULL };
++	char *environment[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", NULL };
++	char *version_command[] = { (char *) openvpn_binary, "--version", NULL };
++	g_autofree char *output = NULL;
++	g_autofree char *version = NULL;
++	g_auto(GStrv) result = NULL;
++	int status;
++	struct stat metadata;
++
++	if (lstat (configuration, &metadata) < 0 && errno == ENOENT)
++		return TRUE;
++
++	if (!uuid || !g_spawn_sync (NULL, command, environment, 0, NULL, NULL, &output, NULL, &status, NULL)
++	    || !WIFEXITED (status) || WEXITSTATUS (status) != 0)
++		goto refused;
++
++	g_strchomp (output);
++	if (!output[0])
++		return TRUE;
++	result = g_strsplit (output, " ", 2);
++	if (!nm_streq0 (result[0], "1397314629") || !result[1]
++	    || !g_regex_match_simple ("^[A-Za-z0-9_.][A-Za-z0-9_.:@-]{0,14}$", result[1], 0, 0)
++	    || nmovpn_arg_is_set (nm_setting_vpn_get_data_item (s_vpn, NM_OPENVPN_KEY_PROXY_TYPE)))
++		goto refused;
++
++	if (!g_spawn_sync (NULL, version_command, environment, 0, NULL, NULL, &version, NULL, &status, NULL)
++	    || !WIFEXITED (status) || WEXITSTATUS (status) != 0
++	    || !strstr (version, "[SiteRouting-SO_MARK]"))
++		goto refused;
++	args_add_strv (args, "--mark", "1397314629", "--bind-dev", result[1], "--disable-dco");
++	return TRUE;
++
++refused:
++	g_set_error_literal (error, NM_VPN_PLUGIN_ERROR, NM_VPN_PLUGIN_ERROR_BAD_ARGUMENTS,
++	                     _("Site Routing refused the marked OpenVPN underlay. Check the approved base profile, kernel policy and marked OpenVPN build."));
++	return FALSE;
++}
++
++static gboolean
+ nm_openvpn_start_openvpn_binary (NMOpenvpnPlugin *plugin,
+                                  NMConnection *connection,
+                                  GError **error)
+@@ -1386,6 +1432,8 @@
+ 	args = g_ptr_array_new_with_free_func (g_free);
+ 
+ 	args_add_strv (args, openvpn_binary);
++	if (!add_site_routing_underlay_args (args, openvpn_binary, connection, s_vpn, error))
++		return FALSE;
+ 
+ 	defport = nm_setting_vpn_get_data_item (s_vpn, NM_OPENVPN_KEY_PORT);
+ 	if (!nmovpn_arg_is_set (defport))

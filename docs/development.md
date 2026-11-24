@@ -127,9 +127,10 @@ UI state. Diagnostic tests check fresh provider/routes, timestamp and refusal
 reason. Root logs identify domain/target/stage and operation category without
 raw stderr, URLs, private route arguments or profile settings.
 
-The separate [VPN underlay prerequisite](vpn-underlay-prerequisite.md) remains
-open. Its namespace reproduction is a characterization of the unexempted
-control flow, not successful live dual-VPN acceptance.
+The [VPN underlay prerequisite](vpn-underlay-prerequisite.md) documents
+the optional marked OpenVPN packages. The namespace tests characterize
+unmarked AUTO lookup and capture marked IPv4 and IPv6 packets and a terminal
+deny after route loss. The live dual-VPN acceptance run remains open.
 
 ## Desktop smoke test
 

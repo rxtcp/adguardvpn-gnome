@@ -13,8 +13,9 @@ test evidence from remaining live work. No workstation VPN or routing
 configuration was changed by the implementation tools.
 
 **TUN/AUTO prerequisite:** [SR-UNDERLAY-01](vpn-underlay-prerequisite.md).
-An optional TUN/NONE setup avoids the conflicting default policy for deployments
-using AdGuard only for assigned sites. Both modes need live verification.
+There is an experimental, opt-in marked launcher for a reviewed direct OpenVPN
+profile and uplink. The TUN/NONE setup remains available for site-only AdGuard.
+Both modes need live verification.
 
 ## Automated evidence
 
@@ -39,6 +40,9 @@ The AUTO lookup reproduction still selects AdGuard ahead of physical host
 routes for two synthetic endpoints. A separate TUN/NONE topology test captures
 IPv4 and IPv6 UDP packets at an uplink peer as remotes change address and port.
 It also checks selected site routes and continued protection after TUN loss.
+The marked AUTO namespace test captures marked IPv4 and IPv6 UDP and TCP SYN
+traffic at the approved peer. It checks unchanged unmarked selection, marked
+denial after loss of the dedicated route, and known-site conflict protection.
 
 | Criterion | Automated evidence | Required live Fedora check |
 | --- | --- | --- |
@@ -47,7 +51,7 @@ It also checks selected site routes and continued protection after TUN loss.
 | AC-03 | Interface removed in namespace; RPDB and independent egress guard deny fallback. | One offline deny was reported; **critical** repeated disconnect and recovery captures remain required. |
 | AC-04 | Activated-without-tunnel has an explicit reason; Check re-reconciles and timestamps its provider/routes. | Reported stale activation was correctly blocked; **critical** synchronized recovery retest remains required. |
 | AC-05 | UUID survives profile rename and new interface/index; namespace reconnect. | Reconnect real VPN with a different interface name. |
-| AC-06 | Dynamic foreign table/priority coexistence, AUTO lookup reproduction and observed packet egress with the TUN/NONE topology. | **TUN/AUTO blocked by SR-UNDERLAY-01.** Verify actual socket egress and reconnects on Fedora in each supported mode. |
+| AC-06 | AUTO lookup reproduction, TUN/NONE egress, marked AUTO egress and fail-closed uplink loss in namespaces. | Verify actual marked OpenVPN sockets, packet egress and reconnects with the patched Fedora packages and protected AdGuard. |
 | AC-07 | A/AAAA/CNAME TTL, retained old IPs, DNS errors, rate and size limits. | Controlled DNS change with both VPNs and caches. |
 | AC-08 | Shared IP and IPv4-mapped IPv6 conflicts never select a winner. | Two test names sharing addresses, different assignments. |
 | AC-09 | Physical interface and gateway discovery, explicit route arguments. | Confirm direct egress while both VPNs are active. |

@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from gi.repository import Gio, GLib
 
 from routing_system import launch
-from site_routing import commands, daemon, entry
+from site_routing import commands, daemon, entry, underlay
 from site_routing.dbus_service import DbusService
 from site_routing.network_events import NetworkEvents
 from site_routing.scheduler import ReconciliationWorker
@@ -223,7 +223,8 @@ class BootstrapTests(unittest.TestCase):
         with patch.object(entry.os, 'geteuid', return_value=0):
             self.assertEqual(entry.main('shell'), 1)
             with patch.multiple(entry, StateStore=Mock(), CommandRunner=Mock(), KernelBackend=Mock(),
-                    restore_guard=Mock(), release_all=Mock(), check_empty=Mock(return_value=True)), patch.object(daemon, 'serve') as serve:
+                    restore_guard=Mock(), release_all=Mock(), check_empty=Mock(return_value=True),
+                    has_policy=Mock(return_value=False), read_config=Mock(return_value=None)), patch.object(daemon, 'serve') as serve:
                 for mode in ('serve', 'restore', 'release', 'check-empty'): self.assertEqual(entry.main(mode), 0)
                 serve.assert_called_once(); entry.restore_guard.assert_called_once(); entry.release_all.assert_called_once()
                 entry.check_empty.return_value = False; self.assertEqual(entry.main('check-empty'), 2)
@@ -246,9 +247,11 @@ class BootstrapTests(unittest.TestCase):
             original = list(sys.path)
             try:
                 with patch.object(launch, 'trusted') as verify, patch.object(Path, 'rglob', return_value=[trusted]), \
-                     patch.object(entry, 'main', return_value=0) as run:
+                     patch.object(entry, 'main', return_value=0) as run, patch.object(underlay, 'launch_mark', return_value=0) as mark:
                     self.assertEqual(launch.main(['restore']), 0)
                     run.assert_called_once_with('restore'); self.assertEqual(verify.call_count, 4)
+                    self.assertEqual(launch.main(['openvpn-underlay', 'fixture-uuid']), 0)
+                    mark.assert_called_once_with('fixture-uuid')
                     verify.side_effect = RuntimeError('unsafe installation')
                     self.assertEqual(launch.main(['restore']), 1)
             finally: sys.path[:] = original

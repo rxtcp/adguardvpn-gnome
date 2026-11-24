@@ -109,8 +109,11 @@ IP-based guarantee; DNS query privacy is not separately guaranteed.
 The VPN's own server/control connection needs a separately verified underlay.
 If AdGuard is needed only for explicitly assigned sites, see the optional
 [TUN/NONE setup](docs/vpn-underlay-prerequisite.md#site-only-adguard-routing-with-tunnone).
-Unassigned traffic follows ordinary system routing in that setup. Automatic
-coexistence with AdGuard TUN/AUTO and live Fedora acceptance remain open.
+Unassigned traffic follows ordinary system routing in that setup.
+For system-wide AdGuard, the optional
+[marked TUN/AUTO setup](docs/vpn-underlay-prerequisite.md#marked-openvpn-transport-with-tunauto)
+requires both patched packages and an approved NetworkManager uplink. Live
+Fedora acceptance remains open.
 
 This requires a **separate** optional system component. After installing the
 extension, review [docs/site-routing.md](docs/site-routing.md), then run from
@@ -149,7 +152,9 @@ GNOME session. Remove the components you installed using the matching procedure.
 ### Remove Site Routing first, if installed
 
 Remove its rules in extension preferences and review any migration rollback
-before removing the helper or extension. Then:
+before removing the helper or extension. If you enabled marked TUN/AUTO, follow
+its [rollback](docs/vpn-underlay-prerequisite.md#roll-back-tunauto-integration)
+first. Then:
 
 ```bash
 sudo ./scripts/uninstall-site-routing.sh

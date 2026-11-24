@@ -5,12 +5,14 @@ There are no vendor binaries, credentials, corporate networks or internet peers.
 """
 import os
 import socket
+import struct
 import subprocess
 import unittest
 
 from site_routing.commands import CommandRunner, IP
 from site_routing.kernel import KernelBackend
 from site_routing.models import Assignment, NetworkPath
+from site_routing.underlay import MARK, TABLE, change_policy, has_policy, verify_policy
 
 INSTALLATION = '00000000-0000-4000-8000-000000000010'
 
@@ -150,6 +152,72 @@ class NamespaceRoutingTests(unittest.TestCase):
         for socket_family, address in ((socket.AF_INET, '198.51.100.8'), (socket.AF_INET6, '2001:db8::8')):
             with socket.socket(socket_family, socket.SOCK_DGRAM) as outgoing:
                 with self.assertRaises(OSError): outgoing.sendto(b'fixture', (address, 443))
+
+    def test_marked_auto_underlay_is_scoped_and_fails_closed(self):
+        self.command('link', 'add', 'fixturewan', 'type', 'veth', 'peer', 'name', 'fixturepeer')
+        peer_mac = '02:00:00:00:00:02'
+        self.command('link', 'set', 'fixturepeer', 'address', peer_mac, 'up')
+        self.command('link', 'set', 'fixturewan', 'up')
+        self.tunnel('203.0.113.2', '2001:db8:3::2', name='fixtureguard', prefix4=32)
+        runner = CommandRunner()
+        change_policy(runner, remove=False)
+        backend = KernelBackend(runner)
+        cases = (
+            (4, socket.AF_INET, 0x0800, '198.18.0.2/24', ('198.51.100.99', '203.0.113.99')),
+            (6, socket.AF_INET6, 0x86DD, '2001:db8:2::2/64', ('2001:db8:4::99', '2001:db8:5::99')),
+        )
+        for family, _, _, address, endpoints in cases:
+            flag = f'-{family}'
+            self.command(flag, 'address', 'add', address, 'dev', 'fixturewan', *(['nodad'] if family == 6 else []))
+            self.command(flag, 'route', 'add', 'default', 'table', '880', 'dev', 'fixtureguard')
+            self.command(flag, 'rule', 'add', 'priority', '30801', 'table', '880')
+            self.command(flag, 'route', 'add', 'default', 'table', str(TABLE), 'dev', 'fixturewan')
+            for endpoint in endpoints:
+                self.command(flag, 'neigh', 'replace', endpoint, 'lladdr', peer_mac, 'nud', 'permanent', 'dev', 'fixturewan')
+
+        journal = {'objects': [], 'pending_objects': [], 'known': [], 'tables': {}, 'priority': 0}
+        shared = '198.51.100.8'
+        manifest = backend.apply({shared: Assignment('fixture-corporate', None)}, journal, INSTALLATION)
+        self.assertEqual(manifest['failures'], {})
+        verify_policy(runner)
+        with self.assertRaises(RuntimeError):
+            runner.read_ip(4, 'route', 'get', shared, 'mark', hex(MARK))
+
+        for family, socket_family, ethertype, address, endpoints in cases:
+            flag = f'-{family}'
+            self.assertEqual(runner.read_ip(family, 'route', 'get', endpoints[0])[0]['dev'], 'fixtureguard')
+            with socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(ethertype)) as capture:
+                capture.bind(('fixturepeer', ethertype))
+                capture.settimeout(2)
+                for endpoint, port in zip(endpoints, (1194, 2050), strict=True):
+                    with socket.socket(socket_family, socket.SOCK_DGRAM) as outgoing:
+                        outgoing.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, MARK)
+                        outgoing.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b'fixturewan\0')
+                        outgoing.connect((endpoint, port))
+                        self.assertEqual(outgoing.getsockname()[0], address.split('/')[0])
+                        payload = f'marked {endpoint}:{port}'.encode()
+                        outgoing.send(payload)
+                        while not capture.recv(2048).endswith(payload):
+                            pass
+                with socket.socket(socket_family, socket.SOCK_STREAM) as outgoing:
+                    outgoing.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, MARK)
+                    outgoing.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b'fixturewan\0')
+                    outgoing.setblocking(False)
+                    outgoing.connect_ex((endpoints[-1], 2443))
+                    while True:
+                        packet = capture.recv(2048)
+                        offset = (packet[0] & 15) * 4 if family == 4 else 40
+                        if len(packet) >= offset + 20 and packet[9 if family == 4 else 6] == socket.IPPROTO_TCP:
+                            destination_port = struct.unpack_from('!H', packet, offset + 2)[0]
+                            if destination_port == 2443 and packet[offset + 13] & 2:
+                                break
+            self.command(flag, 'route', 'del', 'default', 'table', str(TABLE), 'dev', 'fixturewan')
+            with self.assertRaises(RuntimeError):
+                runner.read_ip(family, 'route', 'get', endpoints[-1], 'mark', hex(MARK))
+            self.assertEqual(runner.read_ip(family, 'route', 'get', endpoints[-1])[0]['dev'], 'fixtureguard')
+        change_policy(runner, remove=True)
+        self.assertFalse(has_policy(runner))
+        self.assertTrue(any(row.get('priority') == 30801 for row in runner.read_ip(4, 'rule', 'show')))
 
     def test_site_selection_with_no_adguard_default_preserves_vpn_server_egress(self):
         self.command('link', 'add', 'fixturewan', 'type', 'veth', 'peer', 'name', 'fixturepeer')

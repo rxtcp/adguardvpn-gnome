@@ -20,7 +20,10 @@ def trusted(path: Path) -> None:
 
 
 def main(arguments: list[str]) -> int:
-    if os.geteuid() != 0 or len(arguments) != 1 or arguments[0] not in ('serve', 'restore', 'release', 'check-empty'):
+    fixed = len(arguments) == 1 and arguments[0] in (
+        'serve', 'restore', 'release', 'check-empty', 'apply-underlay', 'remove-underlay')
+    openvpn = len(arguments) == 2 and arguments[0] == 'openvpn-underlay'
+    if os.geteuid() != 0 or not (fixed or openvpn):
         print('Use the installed Site Routing system component with a fixed operation.', file=sys.stderr)
         return 1
     try:
@@ -30,6 +33,9 @@ def main(arguments: list[str]) -> int:
         for entry in ROOT.rglob('*'):
             trusted(entry)
         sys.path.insert(0, str(ROOT))
+        if openvpn:
+            from site_routing.underlay import launch_mark
+            return launch_mark(arguments[1])
         from site_routing.entry import main as run
         return run(arguments[0])
     except (OSError, RuntimeError):
