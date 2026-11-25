@@ -14,8 +14,6 @@ class TransitionLog:
         identities = {rule['id'] for rule in state['rules']}
         self.previous = {identity: value for identity, value in self.previous.items() if identity in identities}
         for rule in state['rules']:
-            if rule['status'] == 'resolving' and rule['id'] in self.previous:
-                continue
             stage, _error = migration_context(state, rule)
             target = rule['target']
             bindings = tuple(sorted((row['address'], row['path']['interface'], row['path']['ifindex'],

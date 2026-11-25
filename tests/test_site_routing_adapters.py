@@ -14,6 +14,9 @@ from site_routing.networkmanager import NetworkManagerReader
 from site_routing.variant_settings import remove_entries
 from site_routing_fakes import NM_ID
 
+PERSISTENT_PROFILE = {'Unsaved': False, 'Flags': 0,
+                      'Filename': '/etc/NetworkManager/system-connections/example.nmconnection'}
+
 
 def settings_variant():
     return GLib.Variant('a{sa{sv}}', {
@@ -72,6 +75,15 @@ class NativeBusTests(unittest.TestCase):
 
 
 class NetworkManagerAdapterTests(unittest.TestCase):
+    def test_migration_does_not_persist_unsaved_temporary_or_unverified_profiles(self):
+        profile = self.reader.profiles()[0]
+        for changed in ({'Unsaved': True}, {'Flags': 2}, {'Flags': 4}, {'Flags': 8}, {'Filename': ''}, {'Filename': None},
+                        {'Filename': '/run/NetworkManager/system-connections/temporary.nmconnection'}, {'Flags': None}):
+            with self.subTest(changed=changed), patch.object(self.bus, 'properties', return_value={**PERSISTENT_PROFILE, **changed}):
+                with self.assertRaisesRegex(RuntimeError, 'saved, persistent NetworkManager profile'):
+                    self.reader.update(profile, profile['serialized'])
+        self.assertIsNone(self.bus.updated)
+
     def test_profile_write_refuses_a_concurrent_edit_and_uses_the_snapshotted_version(self):
         class Connection:
             def __init__(self):
@@ -86,6 +98,9 @@ class NetworkManagerAdapterTests(unittest.TestCase):
                     return GLib.Variant('(v)', (GLib.Variant('t', self.version),))
                 if method == 'GetSettings':
                     return GLib.Variant.new_tuple(self.profile)
+                if method == 'GetAll':
+                    return GLib.Variant('(a{sv})', ({key: GLib.Variant(signature, PERSISTENT_PROFILE[key])
+                                                     for key, signature in {'Unsaved': 'b', 'Flags': 'u', 'Filename': 's'}.items()},))
                 # An edit arrives after the caller's final read but before Update2.
                 self.version += 1
                 settings = {key: self.profile.lookup_value(key, None).unpack() for key in ('connection',)}
@@ -132,7 +147,7 @@ class NetworkManagerAdapterTests(unittest.TestCase):
                 return {'/org/freedesktop/NetworkManager': self.manager, '/active': self.active, '/physical': self.physical,
                          '/device': {'Interface': 'fixturewan', 'Ip4Config': '/uplink-ip4', 'ActiveConnection': '/physical'},
                          '/tun': self.tunnel, '/ip4': self.ip4, '/ip4-new': self.ip4_new,
-                         '/ip6': self.ip6,
+                         '/ip6': self.ip6, '/profile': PERSISTENT_PROFILE,
                          '/uplink-ip4': {'AddressData': [{'address': '192.0.2.3'}], 'InterfaceIndex': 4}}[path]
             def update_settings(self, path, serialized, *, owner, version):
                 self.updated = path, serialized, owner, version

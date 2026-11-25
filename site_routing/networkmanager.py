@@ -1,7 +1,7 @@
 """NetworkManager D-Bus snapshots; never activates or renames a connection."""
 from collections import Counter
 
-from .dbus_transport import NM, SETTINGS
+from .dbus_transport import CONNECTION_IFACE, NM, SETTINGS
 from .migration_fields import settings_hash
 
 ROOT = '/org/freedesktop/NetworkManager'
@@ -32,12 +32,22 @@ class NetworkManagerReader:
         return remove_entries(self.bus.glib, serialized, patches)
 
     def update(self, profile: dict, serialized: str) -> None:
+        owner, version = self.verify_persistent_profile(profile)
+        self.bus.update_settings(profile['path'], serialized, owner=owner, version=version)
+
+    def verify_persistent_profile(self, profile: dict) -> tuple[str, int]:
         owner, path = self.bus.networkmanager_owner(), profile['path']
         version = self.bus.profile_version(owner, path)
         current, _ = self.bus.settings(path, owner=owner)
+        storage = self.bus.properties(owner, path, CONNECTION_IFACE)
         if version != self.bus.profile_version(owner, path) or settings_hash(current) != settings_hash(profile['settings']):
             raise RuntimeError('NetworkManager settings changed during verification; automatic overwrite was refused.')
-        self.bus.update_settings(path, serialized, owner=owner, version=version)
+        flags, filename = storage.get('Flags'), storage.get('Filename')
+        # NetworkManager also exposes in-memory keyfiles (under /run).
+        if (storage.get('Unsaved') is not False or type(flags) is not int or flags != 0
+                or not isinstance(filename, str) or not filename.startswith('/etc/')):
+            raise RuntimeError('Migration requires a saved, persistent NetworkManager profile without unsaved changes.')
+        return owner, version
 
     def migration_profiles(self) -> list[dict]:
         snapshot = self.snapshot()

@@ -158,7 +158,8 @@ class ServiceTests(unittest.TestCase):
         worker = ReconciliationWorker(manager, executor)
         worker.request(); worker.request(True); worker.request()
         self.assertEqual(len(executor.jobs), 1)
-        def refresh(**kwargs):
+        def refresh(*, resolve_dns):
+            self.assertFalse(resolve_dns)
             if manager.refresh.call_count == 1:
                 worker.request(True)
                 raise RuntimeError('fixture discovery failure')
@@ -166,7 +167,8 @@ class ServiceTests(unittest.TestCase):
         with patch.object(worker._closed, 'wait', return_value=False): executor.run()
         self.assertEqual(manager.refresh.call_count, 2)
         manager.emergency_block.assert_called_once()
-        self.assertTrue(manager.refresh.call_args.kwargs['force_dns'])
+        executor.run()
+        manager.refresh_dns.assert_called_once_with(True)
         manager.refresh.side_effect = RuntimeError('fixture refresh failure')
         manager.emergency_block.side_effect = RuntimeError('fixture firewall failure')
         worker.request()
@@ -174,6 +176,7 @@ class ServiceTests(unittest.TestCase):
         self.assertIn('protection could not be confirmed', logs.output[0])
         worker.request(); worker.close(); worker.request(); executor.run()
         self.assertEqual(manager.refresh.call_count, 3)
+        manager.refresh_dns.assert_called_once_with(True)
         ReconciliationWorker(manager).close()
 
     def test_daemon_restores_guards_before_discovery_and_releases_every_runtime_resource(self):

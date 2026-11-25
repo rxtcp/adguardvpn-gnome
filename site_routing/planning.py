@@ -36,6 +36,8 @@ def plan_rules(rules: list[dict], providers: dict, blocked_migrations: dict[str,
                 for network in provider.allowed_networks) for address in rule['addresses'])
         if any(address in conflicts for address in rule['addresses']):
             rule['status'], rule['detail'] = 'conflict', 'An IP is assigned to different targets. Affected IPs are blocked.'
+            if rule.get('dns_error'):
+                rule['detail'] += ' ' + rule['dns_error']
         elif provider is None:
             rule['status'], rule['detail'] = 'provider-missing', 'Provider is missing or no longer accessible; known IPs stay blocked.'
         elif migration_error:

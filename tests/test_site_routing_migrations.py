@@ -4,7 +4,12 @@ import unittest
 from unittest.mock import Mock, patch
 
 from site_routing.migrations import MigrationManager, settings_removals
+from site_routing.networkmanager import NetworkManagerReader
 from site_routing_fakes import MemoryStore, NM_ID, RULE_ID, TARGET
+
+LEGACY_RULE = {'kind': 'rule', 'family': 4,
+               'data': {'priority': 900, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}}
+ROUTE_BINDING = {'ifindex': 17, 'boot_id': 'fixture-boot'}
 
 
 class MigrationTests(unittest.TestCase):
@@ -18,13 +23,13 @@ class MigrationTests(unittest.TestCase):
                         'interface_indices': {4: (17,)},
                         'settings': {'connection': {'id': 'Fixture VPN', 'uuid': NM_ID},
                                      'ipv4': {'route-data': [{'dest': '198.51.100.8', 'prefix': 32},
-                                                             {'dest': '203.0.113.0', 'prefix': 24}],
-                                              'routing-rules': [{'to': '198.51.100.8/32', 'table': 777, 'priority': 900}]}}}
+                                                             {'dest': '203.0.113.0', 'prefix': 24}]}}}
         self.profile['serialized'] = json.dumps(self.profile['settings'])
         profile = self.profile
         class Reader:
             def profiles(self): return [profile]
             def migration_profiles(self): return [profile]
+            def verify_persistent_profile(self, current): return ':1.7', 21
             def render_without(self, serialized, patches):
                 settings = json.loads(serialized)
                 for patch in patches:
@@ -36,16 +41,14 @@ class MigrationTests(unittest.TestCase):
         class Kernel:
             def __init__(self): self.events = []
             def overlaps(self, addresses, journal):
-                return [{'kind': 'rule', 'family': 4, 'data': {
-                    'priority': 900, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}},
-                    {'kind': 'route', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'dev': 'fixturevpn', 'protocol': 'static'}}]
+                return [{'kind': 'route', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'dev': 'fixturevpn', 'protocol': 'static'}}]
             def block(self, addresses, installation): self.events.append('block')
             def protect_subset(self, addresses, journal, installation): self.events.append('block')
             def verify_replacement(self, addresses, journal, target_key): return True
-            def legacy_route_binding(self, item): return {'ifindex': 17, 'boot_id': 'fixture-boot'}
+            def legacy_route_binding(self, item): return ROUTE_BINDING.copy()
             def change_legacy(self, item, action, *, binding=None, before_delete=None):
                 self.events.append(action)
-                receipt = {'ifindex': 17, 'boot_id': 'fixture-boot'} if item['kind'] == 'route' else {}
+                receipt = ROUTE_BINDING.copy()
                 if before_delete is not None:
                     before_delete(receipt)
                 return receipt
@@ -61,6 +64,30 @@ class MigrationTests(unittest.TestCase):
         backup = self.state['migrations'][plan['id']]['profiles'][0]
         self.assertEqual(json.loads(backup['before']), self.profile['settings'])
         self.assertNotIn('203.0.113.0/24', '\n'.join(plan['changes']))
+
+    def test_saved_policy_rule_cannot_establish_ownership_of_a_live_kernel_rule(self):
+        del self.profile['settings']['ipv4']['route-data']
+        self.profile['settings']['ipv4']['routing-rules'] = [{'to': '198.51.100.8/32', 'table': 777, 'priority': 900}]
+        self.profile['serialized'] = json.dumps(self.profile['settings'])
+        with patch.object(self.kernel, 'overlaps', return_value=[LEGACY_RULE]), patch.object(self.reader, 'update') as update:
+            for indices in ({}, {4: (17,)}):
+                self.profile['interface_indices'] = indices
+                with self.assertRaisesRegex(ValueError, 'ownership of a live routing rule'):
+                    self.manager.preview(self.state, self.rule)
+        update.assert_not_called()
+        self.assertEqual(self.state['migrations'], {})
+        self.assertEqual(self.kernel.events, [])
+
+    def test_preexisting_policy_rule_approval_cannot_authorize_or_retire_legacy_entries(self):
+        plan = self.manager.preview(self.state, self.rule)
+        saved = self.state['migrations'][plan['id']]
+        saved['stage'] = 'protected'
+        saved['overlaps'].append(LEGACY_RULE)
+        self.assertEqual(self.manager.approved(self.state), [])
+        with self.assertRaisesRegex(ValueError, 'ownership of a live routing rule'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'protected'})
+        self.assertEqual(self.kernel.events, [])
 
     def test_duplicate_saved_entries_use_the_same_reviewed_interface(self):
         routes = self.profile['settings']['ipv4']['route-data']
@@ -78,14 +105,14 @@ class MigrationTests(unittest.TestCase):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
         self.assertEqual(self.profile['settings'], original)
-        self.assertEqual(len(self.manager.approved(self.state)), 2)
+        self.assertEqual(len(self.manager.approved(self.state)), 1)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
-        self.assertEqual(self.kernel.events, ['block', 'del', 'del'])
+        self.assertEqual(self.kernel.events, ['block', 'del'])
         self.assertEqual(self.profile['settings']['ipv4']['route-data'], [{'dest': '203.0.113.0', 'prefix': 24}])
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'retired'})
         self.assertEqual(self.profile['settings'], original)
         self.assertEqual(self.state['rules'], [])
-        self.assertEqual(self.kernel.events[-3:], ['block', 'add', 'add'])
+        self.assertEqual(self.kernel.events[-2:], ['block', 'add'])
 
     def test_changed_nm_settings_are_not_overwritten_by_a_stale_plan(self):
         plan = self.manager.preview(self.state, self.rule)
@@ -146,7 +173,7 @@ class MigrationTests(unittest.TestCase):
     def test_old_plan_without_route_owner_cannot_approve_or_retire_the_route(self):
         plan = self.manager.preview(self.state, self.rule)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
-        del self.state['migrations'][plan['id']]['overlaps'][1]['route_owner']
+        del self.state['migrations'][plan['id']]['overlaps'][0]['route_owner']
         self.assertEqual(self.manager.approved(self.state), [])
         with self.assertRaisesRegex(ValueError, 'needs a verified route interface binding'):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
@@ -156,7 +183,7 @@ class MigrationTests(unittest.TestCase):
         plan = self.manager.preview(self.state, self.rule)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
         stored = self.state['migrations'][plan['id']]
-        del stored['overlaps'][1]['route_binding']
+        del stored['overlaps'][0]['route_binding']
         with self.assertRaisesRegex(ValueError, 'needs a verified route interface binding'):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         with patch.object(self.kernel, 'legacy_route_binding', return_value=None):
@@ -183,6 +210,42 @@ class MigrationTests(unittest.TestCase):
         update.assert_not_called()
         self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'retired')
 
+    def test_matching_unsaved_settings_cannot_retire_or_restore_kernel_routes(self):
+        plan = self.manager.preview(self.state, self.rule)
+        identity = plan['id']
+        self.manager.apply(self.state, self.rule, {'id': identity, 'stage': 'protect'})
+        backup = self.state['migrations'][identity]['profiles'][0]
+        bus = Mock()
+        bus.networkmanager_owner.return_value = ':1.7'
+        bus.profile_version.return_value = 21
+        bus.settings.side_effect = lambda *_args, **_kwargs: (self.profile['settings'], self.profile['serialized'])
+        metadata = {'Unsaved': True, 'Flags': 0, 'Filename': '/etc/NetworkManager/system-connections/fixture.nmconnection'}
+        bus.properties.return_value = metadata
+        reader = NetworkManagerReader(bus, None)
+        retire = {'id': identity, 'stage': 'retire'}
+
+        with patch.object(reader, 'profiles', self.reader.profiles), patch.object(reader, 'migration_profiles', self.reader.migration_profiles):
+            self.manager.reader = reader
+            self.profile['serialized'], self.profile['settings'] = backup['after'], json.loads(backup['after'])
+            with self.assertRaisesRegex(RuntimeError, 'saved, persistent NetworkManager profile'):
+                self.manager.apply(self.state, self.rule, retire)
+            self.assertNotIn('del', self.kernel.events)
+            self.assertEqual(self.state['migrations'][identity]['stage'], 'failed')
+
+            metadata['Unsaved'] = False
+            self.manager.apply(self.state, self.rule, retire)
+            self.assertIn('del', self.kernel.events)
+            self.assertEqual(self.state['migrations'][identity]['stage'], 'retired')
+
+            metadata['Unsaved'] = True
+            self.profile['serialized'], self.profile['settings'] = backup['before'], json.loads(backup['before'])
+            rollback = {'id': identity, 'stage': 'rollback', 'expected_stage': 'retired'}
+            with self.assertRaisesRegex(RuntimeError, 'saved, persistent NetworkManager profile'):
+                self.manager.apply(self.state, self.rule, rollback)
+            self.assertNotIn('add', self.kernel.events)
+            self.assertIn(self.rule, self.state['rules'])
+        bus.update_settings.assert_not_called()
+
     def test_retirement_rechecks_the_kernel_even_if_the_previous_public_status_was_active(self):
         plan = self.manager.preview(self.state, self.rule)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
@@ -208,13 +271,13 @@ class MigrationTests(unittest.TestCase):
 
     def test_only_exact_host_entries_are_eligible(self):
         patches = settings_removals(self.profile['settings'], ['198.51.100.8'])
-        self.assertEqual(len(patches), 2)
+        self.assertEqual(len(patches), 1)
         self.assertEqual(patches[0]['indices'], [0])
 
     def test_preview_refuses_an_unmatched_saved_selector_even_with_a_live_match_for_the_same_ip(self):
         settings = self.profile['settings']
-        settings['ipv4']['routing-rules'].append({
-            'to': '198.51.100.8/32', 'from': '192.0.2.5', 'from-len': 32, 'table': 777, 'priority': 901})
+        settings['ipv4']['route-data'].append({
+            'dest': '198.51.100.8', 'prefix': 32, 'next-hop': '192.0.2.5'})
         self.profile['serialized'] = json.dumps(settings)
         with self.assertRaisesRegex(ValueError, 'matched exactly'):
             self.manager.preview(self.state, self.rule)
@@ -226,8 +289,8 @@ class MigrationTests(unittest.TestCase):
         with patch.object(self.reader, 'migration_profiles', return_value=[self.profile, other_profile]):
             with self.assertRaisesRegex(ValueError, 'matched exactly'):
                 self.manager.preview(self.state, self.rule)
-        extra = {'kind': 'rule', 'family': 4, 'data': {
-            'priority': 901, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static'}}
+        extra = {'kind': 'route', 'family': 4, 'data': {
+            'dst': '198.51.100.8/32', 'dev': 'foreignvpn', 'table': 777, 'protocol': 'static'}}
         with patch.object(self.kernel, 'overlaps', return_value=[*self.kernel.overlaps([], {}), extra]):
             with self.assertRaisesRegex(ValueError, 'matched exactly'):
                 self.manager.preview(self.state, self.rule)
@@ -263,7 +326,7 @@ class MigrationTests(unittest.TestCase):
         self.manager.apply(self.state, self.rule, {'id': new['id'], 'stage': 'protect'})
         self.manager.apply(self.state, self.rule, {'id': new['id'], 'stage': 'retire'})
         self.assertEqual(self.state['rules'], [self.rule])
-        self.assertEqual(self.profile['settings']['ipv4']['routing-rules'], [])
+        self.assertEqual(self.profile['settings']['ipv4']['route-data'], [{'dest': '203.0.113.0', 'prefix': 24}])
 
     def test_check_returns_the_older_plan_for_rollback_when_the_new_diff_cannot_be_verified(self):
         old = self.manager.preview(self.state, self.rule)
@@ -293,30 +356,30 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(self.state['rules'], [])
         self.assertFalse(self.kernel.events)
 
-    def test_partial_retirement_rolls_back_only_the_entries_it_removed(self):
+    def test_retirement_failure_rolls_back_the_route_it_removed(self):
         plan = self.manager.preview(self.state, self.rule)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
-        rule = self.kernel.overlaps([], {})[0]
-        with patch.object(self.kernel, 'change_legacy', side_effect=[{}, RuntimeError('Deletion failed')]):
-            with self.assertRaisesRegex(RuntimeError, 'Deletion failed'):
+        with patch.object(self.kernel, 'verify_replacement', side_effect=[True, False]):
+            with self.assertRaisesRegex(ValueError, 'disappeared during legacy removal'):
                 self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
 
         # Load the persisted journal as a new process would after partial retirement.
         state = self.store.load()
+        legacy_route = state['migrations'][plan['id']]['overlaps'][0]
         with patch.object(self.kernel, 'change_legacy') as change:
             self.manager.apply(state, state['rules'][0], {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'failed'})
-        change.assert_called_once_with(rule, 'add', binding={})
+        change.assert_called_once_with(legacy_route, 'add', binding=ROUTE_BINDING)
         self.assertEqual(state['rules'], [])
 
     def test_interrupted_deletion_remains_blocked_until_the_exact_policy_is_restored(self):
         plan = self.manager.preview(self.state, self.rule)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
-        legacy_rule = self.kernel.overlaps([], {})[0]
-        live = [legacy_rule]
+        legacy_route = self.state['migrations'][plan['id']]['overlaps'][0]
+        live = [legacy_route]
 
         def interrupt(item, action, *, binding=None, before_delete=None):
             if before_delete is not None:
-                before_delete({})
+                before_delete(ROUTE_BINDING)
             live.remove(item)
             raise SystemExit('Process stopped after deleting the policy')
 
@@ -325,14 +388,14 @@ class MigrationTests(unittest.TestCase):
                 self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         state = self.store.load()
         self.assertTrue(state['rules'][0]['migration_error'])
-        self.assertEqual(state['migrations'][plan['id']]['pending_overlap'], {'index': 0, 'binding': {}})
+        self.assertEqual(state['migrations'][plan['id']]['pending_overlap'], {'index': 0, 'binding': ROUTE_BINDING})
         pending = {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'retiring'}
         with patch.object(self.kernel, 'legacy_present', create=True, side_effect=lambda item, **_: item in live):
             with self.assertRaisesRegex(RuntimeError, 'interrupted kernel deletion'):
                 self.manager.apply(state, state['rules'][0], pending)
             self.assertTrue(state['rules'][0]['migration_error'])
             self.assertEqual(state['migrations'][plan['id']]['stage'], 'failed')
-            live.append(legacy_rule)
+            live.append(legacy_route)
             pending['expected_stage'] = 'failed'
             self.manager.apply(state, state['rules'][0], pending)
         self.assertEqual(state['migrations'][plan['id']]['stage'], 'rolled-back')
@@ -347,12 +410,12 @@ class MigrationTests(unittest.TestCase):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'retired'})
         change.assert_not_called()
         self.assertEqual(self.state['rules'], [])
-        self.assertTrue(self.profile['settings']['ipv4']['routing-rules'])
+        self.assertEqual(len(self.profile['settings']['ipv4']['route-data']), 2)
 
     def test_old_journal_requires_live_evidence_for_unrecorded_policies(self):
         plan = self.manager.preview(self.state, self.rule)
         self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
-        with patch.object(self.kernel, 'change_legacy', side_effect=[{}, None]):
+        with patch.object(self.kernel, 'change_legacy', return_value=None):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
         del self.state['migrations'][plan['id']]['pending_overlap']
         request = {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'retired'}
@@ -375,17 +438,16 @@ class MigrationTests(unittest.TestCase):
         self.assertIn('No eligible legacy', fallback['detail'])
         self.assertEqual(self.state['rules'], [self.rule])
 
-    def test_modern_nm_rule_uses_separate_to_length_and_diff_contains_exact_fields(self):
+    def test_saved_policy_rule_without_a_live_match_also_refuses_migration(self):
         self.profile['settings']['ipv4']['routing-rules'] = [{'to': '198.51.100.8', 'to-len': 32, 'table': 777, 'priority': 900}]
         self.profile['serialized'] = json.dumps(self.profile['settings'])
         patches = settings_removals(self.profile['settings'], self.rule['addresses'])
         self.assertEqual(len(patches), 2)
-        plan = self.manager.preview(self.state, self.rule)
-        self.assertIn('"priority": 900', '\n'.join(plan['changes']))
-        self.assertIn('"table": 777', '\n'.join(plan['changes']))
+        with self.assertRaisesRegex(ValueError, 'ownership of a live routing rule'):
+            self.manager.preview(self.state, self.rule)
 
     def test_same_ip_but_different_saved_table_is_not_permission_to_delete_foreign_policy(self):
-        self.profile['settings']['ipv4']['routing-rules'][0]['table'] = 778
+        self.profile['settings']['ipv4']['route-data'][0]['table'] = 778
         self.profile['serialized'] = json.dumps(self.profile['settings'])
         with self.assertRaisesRegex(ValueError, 'matched exactly'):
             self.manager.preview(self.state, self.rule)

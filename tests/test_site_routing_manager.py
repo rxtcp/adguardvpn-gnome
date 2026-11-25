@@ -1,8 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from site_routing.manager import RoutingManager
 from site_routing.models import NetworkPath, Provider, Target
+from site_routing.scheduler import ReconciliationWorker
 from site_routing_fakes import Kernel, MemoryStore, Registry, Resolver, TARGET, PATH4, PATH6
 
 
@@ -59,6 +62,163 @@ class RoutingManagerTests(unittest.TestCase):
         self.manager.refresh(force_dns=True)
         self.assertEqual(self.manager.rules(1000)[0]['status'], 'dns-error')
         self.assertIn('198.51.100.8', self.kernel.calls[-1][1])
+
+    def test_adding_a_rule_does_not_refresh_other_rules_with_valid_dns(self):
+        for index in range(32):
+            domain = f'cached-{index}.example'
+            self.resolver.answers[domain] = (('198.51.100.9',), 60)
+            self.add(domain)
+        self.now += 5
+        self.resolver.calls.clear()
+        original = self.resolver.resolve
+
+        def slow_lookup(domain, provider):
+            self.now += 4
+            return original(domain, provider)
+
+        self.resolver.resolve = slow_lookup
+        started = self.now
+        self.add('two.example')
+        self.assertEqual([domain for domain, _ in self.resolver.calls], ['two.example'])
+        self.assertEqual(self.now - started, 4)
+
+    def test_cached_reassignment_applies_while_background_dns_is_blocked(self):
+        rule = self.add()
+        self.now += 60
+        started, finish = Event(), Event()
+
+        def slow_lookup(_domain, _provider):
+            started.set()
+            finish.wait(5)
+            return ('198.51.100.99',), 60
+
+        self.resolver.resolve = slow_lookup
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            background = executor.submit(self.manager.refresh)
+            try:
+                self.assertTrue(started.wait(2))
+                edit = executor.submit(self.manager.handle, {'operation': 'update-rule', 'id': rule['id'],
+                    'domain': rule['domain'], 'target': {'kind': 'direct', 'id': 'direct'}}, 1000, 'fixtureuser')
+                self.assertEqual(edit.result(timeout=2)['rule']['target']['kind'], 'direct')
+                self.assertIsNone(self.kernel.calls[-1][1]['198.51.100.8'].path)
+                self.assertFalse(background.done())
+            finally:
+                finish.set()
+            background.result(timeout=2)
+        self.assertNotIn('198.51.100.99', self.store.state['rules'][0]['addresses'])
+
+    def test_vpn_disconnect_is_reconciled_while_background_dns_is_blocked(self):
+        self.add()
+        self.now += 60
+        started, finish, disconnected = Event(), Event(), Event()
+
+        def slow_lookup(_domain, _provider):
+            started.set()
+            finish.wait(5)
+            return ('198.51.100.8',), 60
+
+        def observe_refresh(**options):
+            refresh(**options)
+            if self.manager.rules(1000)[0]['status'] == 'blocked-offline':
+                disconnected.set()
+
+        refresh = self.manager.refresh
+        self.resolver.resolve = slow_lookup
+        worker = ReconciliationWorker(self.manager)
+        try:
+            with patch.object(self.manager, 'refresh', side_effect=observe_refresh):
+                worker.request()
+                self.assertTrue(started.wait(2))
+                self.registry.providers[0] = Provider(Target.parse(TARGET), 'Disconnected VPN')
+                worker.request(True)
+                self.assertTrue(disconnected.wait(2), 'The VPN event waited for DNS to finish')
+                self.assertIsNone(self.kernel.calls[-1][1]['198.51.100.8'].path)
+        finally:
+            finish.set()
+            worker.close()
+        self.assertEqual(self.manager.rules(1000)[0]['status'], 'blocked-offline')
+
+    def test_address_admitted_at_capacity_accounts_for_an_earlier_answer_in_the_same_batch(self):
+        vpn_address, direct_address = '198.51.100.8', '198.51.100.9'
+        shared_address, extra_address = '198.51.100.10', '198.51.100.11'
+        self.resolver.answers['one.example'] = ((vpn_address,), 60)
+        self.resolver.answers['two.example'] = ((direct_address,), 60)
+        first = self.add()
+        second = self.add('two.example', {'kind': 'direct', 'id': 'direct'})
+        self.resolver.answers['one.example'] = ((shared_address, extra_address), 60)
+        self.resolver.answers['two.example'] = ((shared_address,), 60)
+        self.now += 60
+
+        with patch('site_routing.dns_refresh.MAX_TRACKED_ADDRESSES', 3):
+            self.manager.refresh()
+        self.assertEqual(set(self.store.state['kernel']['known']), {vpn_address, direct_address, shared_address})
+        assignments = self.kernel.calls[-1][1]
+        self.assertIsNone(assignments[shared_address].path)
+        self.assertEqual(assignments[vpn_address].path, PATH4)
+        self.assertEqual(assignments[direct_address].path.interface, 'fixturewan')
+        for rule in (first, second):
+            checked = self.manager.diagnose(rule['id'], 1000)
+            self.assertEqual(checked['rule']['status'], 'conflict')
+            self.assertIn(shared_address, checked['addresses'])
+        self.assertIn('total tracked-address limit', self.manager.rules(1000)[0]['detail'])
+
+    def test_new_shared_ip_is_not_admitted_when_one_claiming_rule_is_full(self):
+        full_addresses = ('198.51.100.8', '198.51.100.9')
+        shared_address = '198.51.100.10'
+        self.resolver.answers['one.example'] = (full_addresses, 60)
+        self.resolver.answers['two.example'] = (('198.51.100.11',), 60)
+        self.add()
+        self.add('two.example', {'kind': 'direct', 'id': 'direct'})
+        self.resolver.answers['one.example'] = self.resolver.answers['two.example'] = ((shared_address,), 60)
+        self.now += 60
+        with patch('site_routing.dns_refresh.MAX_ADDRESSES', 2):
+            self.manager.refresh()
+        self.assertNotIn(shared_address, self.store.state['kernel']['known'])
+        self.assertEqual(self.store.state['rules'][0]['addresses'], list(full_addresses))
+        first, second = self.manager.rules(1000)
+        self.assertIn('too many addresses', first['detail'])
+        self.assertIn('every matching rule', second['detail'])
+
+    def test_exceeding_total_address_capacity_only_reports_dns_error_for_that_rule(self):
+        for index in range(16):
+            domain = f'capacity-{index}.example'
+            addresses = tuple(f'2001:db8::{value:x}' for value in range(256 * index + 1, 256 * (index + 1) + 1))
+            self.resolver.answers[domain] = (addresses, 60)
+            self.add(domain)
+        self.resolver.answers['two.example'] = (('198.51.100.99',), 60)
+        result = self.add('two.example')
+        self.assertEqual(result['status'], 'dns-error')
+        self.assertIn('total tracked-address limit', result['detail'])
+        self.assertEqual(len(self.store.state['kernel']['known']), 4096)
+        self.assertTrue(all(rule['status'] == 'active' for rule in self.manager.rules(1000) if rule['id'] != result['id']))
+        self.assertTrue(all(call[0] != 'block' for call in self.kernel.calls))
+
+        self.resolver.answers['two.example'] = (('198.51.100.99', '2001:db8::1'), 60)
+        self.now += 30
+        self.manager.refresh()
+        checked = self.manager.diagnose(result['id'], 1000)
+        self.assertEqual(checked['addresses'], ['2001:db8::1'])
+        self.assertIn('total tracked-address limit', checked['rule']['detail'])
+
+    def test_dns_failure_at_the_per_rule_limit_keeps_every_cached_address(self):
+        addresses = tuple(f'2001:db8::{value:x}' for value in range(1, 257))
+        self.resolver.answers['one.example'] = (addresses, 60)
+        self.add()
+        self.now += 60
+        self.resolver.answers['one.example'] = (('198.51.100.99',), 60)
+        self.manager.refresh()
+        rule = self.manager.rules(1000)[0]
+        self.assertEqual(rule['status'], 'dns-error')
+        self.assertIn('too many addresses', rule['detail'])
+        self.assertEqual(set(self.store.state['kernel']['known']), set(addresses))
+
+        shared = '198.51.100.99'
+        self.resolver.answers['two.example'] = ((shared,), 60)
+        self.add('two.example')
+        self.now += 30
+        self.manager.refresh()
+        self.assertEqual(set(self.store.state['rules'][0]['addresses']), set(addresses))
+        self.assertEqual(self.kernel.calls[-1][1][shared].path, PATH4)
 
     def test_shared_ip_with_different_target_blocks_all_affected_rules(self):
         first = self.add()

@@ -44,12 +44,19 @@ The service queries A and AAAA, follows CNAME answers and uses the smallest
 answer/CNAME TTL. It refreshes after expiry and network/provider events, with
 a ten-second recovery timer and a five-second minimum between attempts for
 each rule. TTLs are bounded to 5–3600 seconds; failures retry after 30 seconds.
+Network events reconcile cached addresses independently of background DNS
+lookups. An add or reassignment can look up the affected host without waiting
+for other rules.
 Old answers remain protected until the rule is explicitly removed. This avoids
 releasing a cached address during DNS failure, but can retain obsolete addresses.
 
 There are at most 128 rules, 256 retained addresses per rule and 4096 tracked
-addresses globally. Limit errors are explicit; reducing a retained set requires
-reviewing and removing the rule, which releases its protection.
+addresses globally. At capacity, only admitted addresses enter routing. Every
+answer in the refresh is considered for new admitted addresses, including an
+answer that exceeds global capacity. Shared destinations with different
+targets stay blocked. The affected rule reports a limit if some of its IPs
+could not be tracked. To reduce a retained set, review and remove its rule,
+which releases that rule's protection.
 
 An active NM provider's advertised DNS servers are preferred. When unavailable,
 including an inactive VPN, the system resolver is used. AdGuard uses the active
@@ -169,11 +176,12 @@ An overlapping destination policy blocks application and requires review.
    removal must match a single live legacy policy. NetworkManager must confirm
    the route's kernel interface index for the active profile that owns it and
    for the route's address family. The diff shows the interface name and index.
-   The private plan also records the profile UUID and boot ID. Only exact host
-   routes and simple destination rules are eligible. Tables, priorities and
-   selectors must match. Routes also require matching interfaces, gateways,
-   source addresses and metrics. Broader networks,
-   ambiguous defaults and complex selectors require administrator review.
+   The private plan also records the profile UUID and boot ID. Eligible exact
+   host routes must match table, interface, gateway, source address and metric.
+   Saved `routing-rules` and overlapping live policy rules require manual
+   reconciliation through NetworkManager because kernel rule fields cannot
+   identify the profile that installed them. Broader networks, ambiguous defaults
+   and complex selectors also require administrator review.
 2. **Install protected replacement** authorizes the reviewed plan, retaining
    existing NM entries and saving a private, hashed backup of non-secret settings.
    Background reconciliation accepts route overlaps only while the current kernel
@@ -211,9 +219,14 @@ recovered NetworkManager profile, use **Check**, and confirm rollback again.
 The confirmation applies to the stage shown in **Check**. If another client
 moves the migration to a different stage, use **Check** again before confirming.
 
-Retirement and rollback check the profile version during the write. If
-NetworkManager reports a concurrent edit or cannot provide a usable version,
-the migration refuses the write. For an older plan still at `protected` without
+Retirement and rollback check that the profile is stored under `/etc/` without
+unsaved changes or temporary, generated or external flags. The service does
+this before changing legacy kernel routes, even when the profile settings
+already match the expected snapshot. Profile writes are bound to the verified
+version. If NetworkManager reports a concurrent edit or cannot provide a
+usable version, the migration refuses the change. Older
+plans that include policy rules no longer authorize overlaps or retirement.
+For an older plan still at `protected` without
 reviewed route bindings, active profile ownership, or exact saved-entry
 verification, use **Check** to prepare a new diff. The assignment and known addresses stay in
 place, and **Install protected replacement** can authorize the new diff after

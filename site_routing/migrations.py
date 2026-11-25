@@ -13,10 +13,18 @@ class StaleMigrationConfirmation(ValueError):
     pass
 
 
+UNVERIFIED_RULE = ('NetworkManager cannot prove ownership of a live routing rule. '
+                   'Reconcile the legacy policy through NetworkManager before retrying.')
+
+
+def contains_routing_rule(overlaps: list[dict]) -> bool:
+    return any(item['kind'] == 'rule' for item in overlaps)
+
+
 def needs_new_review(plan: dict) -> bool:
     return (plan.get('exact_entries') is not True or bool(plan.get('route_bindings_stale')) or
-            any(item['kind'] == 'route' and not (item.get('route_binding') and item.get('route_owner'))
-                for item in plan['overlaps']))
+            contains_routing_rule(plan['overlaps']) or
+            any(not (item.get('route_binding') and item.get('route_owner')) for item in plan['overlaps']))
 
 
 def profile_owns_route(profile: dict, item: dict, binding: dict) -> bool:
@@ -56,6 +64,8 @@ class MigrationManager:
     def _create_preview(self, state: dict, rule: dict) -> dict | None:
         profiles, changes, matched = [], [], {}
         overlaps = self.kernel.overlaps(rule['addresses'], state['kernel'])
+        if contains_routing_rule(overlaps):
+            raise ValueError(UNVERIFIED_RULE)
         for profile in self.reader.migration_profiles():
             if profile['users'] and rule['owner_name'] not in profile['users']:
                 continue
@@ -64,6 +74,8 @@ class MigrationManager:
                 continue
             for patch in patches:
                 setting, field = patch['setting'], patch['field']
+                if field == 'routing-rules':
+                    raise ValueError(UNVERIFIED_RULE)
                 for index in patch['indices']:
                     row = profile['settings'][setting][field][index]
                     matches = [i for i, item in enumerate(overlaps) if setting == f'ipv{item["family"]}'
@@ -71,17 +83,15 @@ class MigrationManager:
                     if len(matches) != 1 or matched.setdefault(matches[0], profile['uuid']) != profile['uuid']:
                         raise ValueError('A saved policy entry cannot be matched exactly to a live NM policy; no automatic deletion is allowed.')
                     item = overlaps[matches[0]]
-                    binding_detail = ''
-                    if item['kind'] == 'route':
-                        if 'route_binding' not in item:
-                            binding = self.kernel.legacy_route_binding(item)
-                            if binding is None:
-                                raise ValueError('The reviewed legacy route disappeared. Use Check to review a new diff.')
-                            if not profile_owns_route(profile, item, binding):
-                                raise ValueError('The legacy route interface is not verified for the active NetworkManager profile.')
-                            item['route_binding'] = binding
-                            item['route_owner'] = profile['uuid']
-                        binding_detail = f' [interface {item["data"]["dev"]}, kernel index {item["route_binding"]["ifindex"]}]'
+                    if 'route_binding' not in item:
+                        binding = self.kernel.legacy_route_binding(item)
+                        if binding is None:
+                            raise ValueError('The reviewed legacy route disappeared. Use Check to review a new diff.')
+                        if not profile_owns_route(profile, item, binding):
+                            raise ValueError('The legacy route interface is not verified for the active NetworkManager profile.')
+                        item['route_binding'] = binding
+                        item['route_owner'] = profile['uuid']
+                    binding_detail = f' [interface {item["data"]["dev"]}, kernel index {item["route_binding"]["ifindex"]}]'
                     changes.append(f'{profile["name"]} ({profile["uuid"]}): remove {setting}.{field}[{index}] '
                                    + json.dumps(row, sort_keys=True, default=list) + binding_detail)
             after, after_settings = self.reader.render_without(profile['serialized'], patches)
@@ -130,6 +140,8 @@ class MigrationManager:
         plan.pop('last_error', None)
 
     def _apply(self, state: dict, rule: dict, plan: dict, stage: str) -> None:
+        if stage != 'rollback' and contains_routing_rule(plan['overlaps']):
+            raise ValueError(UNVERIFIED_RULE)
         if stage != 'rollback' and plan.get('exact_entries') is not True:
             raise ValueError('This plan predates exact saved-entry verification. Review a new diff or roll back the old plan.')
         if stage != 'rollback' and needs_new_review(plan):
@@ -170,7 +182,9 @@ class MigrationManager:
                 if current not in (backup['before_hash'], backup['after_hash']):
                     raise ValueError('NM settings changed after preview; automatic overwrite was refused.')
                 expected = backup['after_hash'] if stage == 'retire' else backup['before_hash']
-                if current != expected:
+                if current == expected:
+                    self.reader.verify_persistent_profile(profile)
+                else:
                     self.reader.update(profile, backup['after'] if stage == 'retire' else backup['before'])
             self._apply_legacy_changes(state, plan, stage)
             if stage == 'retire' and not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key):
@@ -193,13 +207,10 @@ class MigrationManager:
         state['rules'].remove(rule)
 
     def _verify_route_bindings(self, plan: dict) -> None:
-        routes = [(index, item) for index, item in enumerate(plan['overlaps']) if item['kind'] == 'route']
-        if not routes:
-            return
         plan['route_bindings_stale'] = True
         removed = plan.get('removed_overlaps', {})
         profiles = {profile['uuid']: profile for profile in self.reader.migration_profiles()}
-        for index, item in routes:
+        for index, item in enumerate(plan['overlaps']):
             expected = item['route_binding']
             current = self.kernel.legacy_route_binding(item)
             if current is None and removed.get(str(index)) == expected:

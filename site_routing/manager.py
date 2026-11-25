@@ -3,7 +3,8 @@ import copy
 import threading
 import time
 
-from .dns_refresh import refresh_answers
+from .dns_refresh import DnsResponse, due_provider, resolve_answer, retain_answers
+from .domain import MAX_TRACKED_ADDRESSES
 from .planning import migration_blocks, plan_rules, public_rule, visible_providers
 from .protocol import validate_request
 from .rule_operations import change_rule, owned_rule, restore_failed_removal
@@ -23,6 +24,7 @@ class RoutingManager:
         self._providers = {}
         self._transitions = TransitionLog()
         self._mutex = threading.RLock()
+        self._dns_pending: set[str] = set()
 
     def rules(self, uid: int) -> list[dict]:
         return [public_rule(rule) for rule in self._state['rules'] if rule['owner_uid'] == uid]
@@ -36,6 +38,7 @@ class RoutingManager:
             return {'providers': [provider.public() for provider in visible_providers(self.registry.discover(), username).values()]}
         if operation == 'diagnose-rule':
             return self.diagnose(request['id'], uid)
+        jobs = []
         with self._mutex, self.store.lock():
             state = self.store.load()
             removed = copy.deepcopy(owned_rule(state, request['id'], uid)) if operation == 'remove-rule' else None
@@ -56,11 +59,13 @@ class RoutingManager:
                     self._publish(state)
                     raise
             else:
-                rule = change_rule(state, request, self.registry.discover(), uid, username, self.clock())
+                providers = self.registry.discover()
+                rule = change_rule(state, request, providers, uid, username, self.clock())
             state['revision'] += 1
             self.store.save(state)
             self._state = copy.deepcopy(state)
-            self.refresh(force_dns=True)
+            if operation != 'add-rule':
+                self.refresh(resolve_dns=False)
             if removed is not None:
                 state = self.store.load()
                 failure = restore_failed_removal(state, removed)
@@ -68,7 +73,12 @@ class RoutingManager:
                     self.store.save(state)
                     self._publish(state)
                     raise ValueError(failure)
-            return {'rules': self.rules(uid)} if rule is None or rule not in state['rules'] else {'rule': public_rule(owned_rule(self._state, rule['id'], uid))}
+            if rule is not None and 'migration' not in request:
+                jobs = self._dns_jobs([rule], providers, force=False)
+        self._resolve_dns(jobs)
+        identity = rule['id'] if rule is not None else None
+        rules = self.rules(uid)
+        return next(({'rule': current} for current in rules if current['id'] == identity), {'rules': rules})
 
     def refresh(self, force_dns: bool = False, resolve_dns: bool = True) -> None:
         with self._mutex, self.store.lock():
@@ -76,35 +86,69 @@ class RoutingManager:
             if not state['rules'] and not state['kernel']['known'] and not state['kernel']['objects']:
                 self._publish(state)
                 return
-            providers = self.registry.discover()
-            self._providers = providers
-            if resolve_dns:
-                refresh_answers(state['rules'], providers, self.resolver, self.clock(), force_dns,
-                                lambda: self._publish(state))
-            assignments = plan_rules(state['rules'], providers, migration_blocks(state))
-            known = sorted(set(state['kernel']['known']) | set(assignments))
-            if len(known) > 4096:
-                raise ValueError('The total tracked-address limit has been reached.')
-            state['kernel']['known'] = known
-            self.store.save(state)  # Persist guard intent before the first network write.
+            self._reconcile(state, self.registry.discover())
+        if resolve_dns:
+            self.refresh_dns(force_dns)
+
+    def refresh_dns(self, force_dns: bool = False) -> None:
+        with self._mutex, self.store.lock():
+            jobs = self._dns_jobs(self.store.load()['rules'], self._providers, force_dns)
+        self._resolve_dns(jobs)
+
+    def _dns_jobs(self, rules: list[dict], providers: dict, force: bool) -> list:
+        now = self.clock()
+        jobs = []
+        for rule in rules:
+            identity = rule['id']
+            provider = due_provider(rule, providers, now, force)
+            if provider is not None and identity not in self._dns_pending:
+                self._dns_pending.add(identity)
+                jobs.append((identity, rule.get('dns_revision', 0), rule['domain'], provider))
+        return jobs
+
+    def _resolve_dns(self, jobs: list) -> None:
+        if not jobs:
+            return
+        try:
+            answers = {}
+            for identity, revision, domain, provider in jobs:
+                started = self.clock()
+                answer = resolve_answer(self.resolver, domain, provider)
+                answers[identity] = DnsResponse(revision, started, self.clock(), answer)
+            with self._mutex, self.store.lock():
+                state = self.store.load()
+                if retain_answers(state['rules'], answers, set(state['kernel']['known'])):
+                    self._reconcile(state, self.registry.discover())
+        finally:
+            with self._mutex:
+                self._dns_pending.difference_update(identity for identity, *_ in jobs)
+
+    def _reconcile(self, state: dict, providers: dict) -> None:
+        self._providers = providers
+        assignments = plan_rules(state['rules'], providers, migration_blocks(state))
+        known = sorted(set(state['kernel']['known']) | set(assignments))
+        if len(known) > MAX_TRACKED_ADDRESSES:
+            raise ValueError('The total tracked-address limit has been reached.')
+        state['kernel']['known'] = known
+        self.store.save(state)  # Persist guard intent before the first network write.
+        try:
+            approved = self.migrations.approved(state) if self.migrations else ()
+            state['kernel'] = self.kernel.apply(assignments, state['kernel'], state['installation_id'], approved,
+                checkpoint=lambda journal: self._checkpoint(state, journal))
+            apply_destination_failures(state)
+        except (OSError, RuntimeError, ValueError) as error:
+            detail = str(error)
             try:
-                approved = self.migrations.approved(state) if self.migrations else ()
-                state['kernel'] = self.kernel.apply(assignments, state['kernel'], state['installation_id'], approved,
-                    checkpoint=lambda journal: self._checkpoint(state, journal))
-                apply_destination_failures(state)
-            except (OSError, RuntimeError, ValueError) as error:
-                detail = str(error)
-                try:
-                    self.kernel.block(known, state['installation_id'])
-                except (OSError, RuntimeError, ValueError):
-                    detail = 'Guard installation failed; protection is not confirmed.'
-                for rule in state['rules']:
-                    rule['status'] = 'conflict' if getattr(error, 'conflict', False) else 'apply-error'
-                    rule['detail'] = detail
-                state['kernel']['global_error'] = detail
-            append_migration_details(state)
-            self.store.save(state)
-            self._publish(state)
+                self.kernel.block(known, state['installation_id'])
+            except (OSError, RuntimeError, ValueError):
+                detail = 'Guard installation failed; protection is not confirmed.'
+            for rule in state['rules']:
+                rule['status'] = 'conflict' if getattr(error, 'conflict', False) else 'apply-error'
+                rule['detail'] = detail
+            state['kernel']['global_error'] = detail
+        append_migration_details(state)
+        self.store.save(state)
+        self._publish(state)
 
     def _publish(self, state: dict) -> None:
         self._state = copy.deepcopy(state)

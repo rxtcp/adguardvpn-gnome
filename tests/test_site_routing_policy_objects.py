@@ -140,7 +140,7 @@ class PolicyOwnershipTests(unittest.TestCase):
         self.assertEqual(backend.diagnostics(['198.51.100.8'])[0]['type'], 'unreachable-or-unavailable')
         self.assertFalse(backend.verify_replacement(['198.51.100.8'], manifest, 'vpn'))
 
-    def test_reviewed_legacy_changes_are_exact_idempotent_and_keep_unrelated_rows(self):
+    def test_live_legacy_rule_cannot_be_approved_or_deleted_and_older_rollback_can_restore_it(self):
         runner = KernelFixture(); backend = KernelBackend(runner)
         row = {'priority': 900, 'dst': '198.51.100.8/32', 'table': 777, 'protocol': '196'}
         runner.current[4]['rule'].append(copy.deepcopy(row))
@@ -148,15 +148,16 @@ class PolicyOwnershipTests(unittest.TestCase):
         self.assertEqual(entries, [{'kind': 'rule', 'family': 4, 'data': row}])
         item = entries[0]
         self.assertTrue(backend.legacy_present(item, binding={}))
-        def record_intent(binding):
-            self.assertEqual(binding, {})
-            self.assertIn(row, runner.current[4]['rule'])
-        callback = Mock(side_effect=record_intent)
-        self.assertEqual(backend.change_legacy(item, 'del', before_delete=callback), {})
-        callback.assert_called_once_with({})
-        self.assertIsNone(backend.change_legacy(item, 'del'))
+        callback = Mock()
+        result = backend.apply({'198.51.100.8': Assignment('vpn', PATH4)},
+                               {'objects': [], 'known': [], 'tables': {}, 'priority': 0}, INSTALLATION, approved=[item])
+        self.assertEqual(result['failures']['198.51.100.8']['status'], 'conflict')
+        with self.assertRaisesRegex(ValueError, 'cannot be verified for deletion'):
+            backend.change_legacy(item, 'del', before_delete=callback)
+        callback.assert_not_called()
+        self.assertIn(row, runner.current[4]['rule'])
+        runner.current[4]['rule'].remove(row)
         self.assertFalse(backend.legacy_present(item))
-        self.assertNotIn(row, runner.current[4]['rule'])
         backend.change_legacy(item, 'add'); backend.change_legacy(item, 'add')
         self.assertEqual(runner.current[4]['rule'].count(row), 1)
         self.assertIn({'priority': 1000, 'table': 880}, runner.current[4]['rule'])
@@ -182,6 +183,7 @@ class PolicyOwnershipTests(unittest.TestCase):
             self.assertNotIn(row, runner.current[4]['route'])
             self.assertIsNone(backend.legacy_route_binding(item))
             self.assertFalse(backend.legacy_present(item, binding=binding))
+            self.assertIsNone(backend.change_legacy(item, 'del', binding=binding))
 
             runner.read_links.return_value = []
             with self.assertRaisesRegex(RuntimeError, 'interface identity'):
