@@ -156,9 +156,10 @@ destination policy rules require manual review and reconciliation through
 NetworkManager. Retirement and rollback write only saved, persistent NM
 profiles without pending edits.
 
-Rule changes reconcile cached addresses without waiting for a DNS sweep.
-If a DNS answer would exceed the tracked-address limit, the affected rule
-reports the limit and previously tracked IPs remain protected.
+VPN events and rule changes reconcile cached addresses while background DNS
+lookups run. At the tracked-address limit, all answers in the same refresh are
+checked for conflicts before an admitted address gets a route. Addresses
+already tracked stay protected.
 
 Rerunning the Site Routing installer restores known-address protection through
 the manager while keeping the early guard and NetworkManager running.

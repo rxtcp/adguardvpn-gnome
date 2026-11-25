@@ -32,6 +32,10 @@ class NetworkManagerReader:
         return remove_entries(self.bus.glib, serialized, patches)
 
     def update(self, profile: dict, serialized: str) -> None:
+        owner, version = self.verify_persistent_profile(profile)
+        self.bus.update_settings(profile['path'], serialized, owner=owner, version=version)
+
+    def verify_persistent_profile(self, profile: dict) -> tuple[str, int]:
         owner, path = self.bus.networkmanager_owner(), profile['path']
         version = self.bus.profile_version(owner, path)
         current, _ = self.bus.settings(path, owner=owner)
@@ -43,7 +47,7 @@ class NetworkManagerReader:
         if (storage.get('Unsaved') is not False or type(flags) is not int or flags != 0
                 or not isinstance(filename, str) or not filename.startswith('/etc/')):
             raise RuntimeError('Migration requires a saved, persistent NetworkManager profile without unsaved changes.')
-        self.bus.update_settings(path, serialized, owner=owner, version=version)
+        return owner, version
 
     def migration_profiles(self) -> list[dict]:
         snapshot = self.snapshot()

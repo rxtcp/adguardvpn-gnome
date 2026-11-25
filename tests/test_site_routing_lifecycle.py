@@ -58,19 +58,21 @@ class RoutingLifecycleTests(unittest.TestCase):
     def test_worker_serializes_refresh_and_no_new_work_starts_after_close(self):
         class Manager:
             def __init__(self): self.calls = []
-            def refresh(self, force_dns=False): self.calls.append(force_dns)
+            def refresh(self, *, resolve_dns): self.calls.append(('routes', resolve_dns))
+            def refresh_dns(self, force_dns): self.calls.append(('dns', force_dns))
         manager = Manager()
         worker = ReconciliationWorker(manager, executor=ImmediateExecutor())
         worker.request(True)
         worker.request(False)
         worker.close()
         worker.request(True)
-        self.assertEqual(manager.calls, [True, False])
+        self.assertEqual(manager.calls, [('routes', False), ('dns', True), ('routes', False), ('dns', False)])
 
     def test_failed_background_refresh_reasserts_guard(self):
         class Manager:
             def __init__(self): self.blocked = False
-            def refresh(self, force_dns=False): raise RuntimeError('failed')
+            def refresh(self, *, resolve_dns): raise RuntimeError('failed')
+            def refresh_dns(self, force_dns): raise AssertionError('DNS queued after reconciliation failure')
             def emergency_block(self): self.blocked = True
         manager = Manager()
         worker = ReconciliationWorker(manager, executor=ImmediateExecutor())

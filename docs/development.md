@@ -127,10 +127,12 @@ UI state. Diagnostic tests check fresh provider/routes, timestamp and refusal
 reason. Root logs identify domain/target/stage and operation category without
 raw stderr, URLs, private route arguments or profile settings.
 
-DNS lookups run outside the reconciliation locks. Results for removed or
-reassigned rules are discarded, and over-capacity answers report a per-rule
-error. Migration tests exercise refusal of policy-rule overlaps and verify
-that NetworkManager writes require clean, persistent profile storage.
+Network events reconcile cached routes while the background worker resolves
+DNS. Results for removed or reassigned rules are discarded. Address admission
+checks shared IPs across the entire DNS batch before applying routes at
+capacity. Migration tests exercise refusal of policy-rule overlaps and verify
+that legacy route changes require clean, persistent NetworkManager profiles
+even when no profile write is needed.
 
 The [VPN underlay prerequisite](vpn-underlay-prerequisite.md) documents
 the optional marked OpenVPN packages. The namespace tests characterize

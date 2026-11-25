@@ -182,7 +182,9 @@ class MigrationManager:
                 if current not in (backup['before_hash'], backup['after_hash']):
                     raise ValueError('NM settings changed after preview; automatic overwrite was refused.')
                 expected = backup['after_hash'] if stage == 'retire' else backup['before_hash']
-                if current != expected:
+                if current == expected:
+                    self.reader.verify_persistent_profile(profile)
+                else:
                     self.reader.update(profile, backup['after'] if stage == 'retire' else backup['before'])
             self._apply_legacy_changes(state, plan, stage)
             if stage == 'retire' and not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key):

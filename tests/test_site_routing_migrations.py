@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from site_routing.migrations import MigrationManager, settings_removals
+from site_routing.networkmanager import NetworkManagerReader
 from site_routing_fakes import MemoryStore, NM_ID, RULE_ID, TARGET
 
 LEGACY_RULE = {'kind': 'rule', 'family': 4,
@@ -28,6 +29,7 @@ class MigrationTests(unittest.TestCase):
         class Reader:
             def profiles(self): return [profile]
             def migration_profiles(self): return [profile]
+            def verify_persistent_profile(self, current): return ':1.7', 21
             def render_without(self, serialized, patches):
                 settings = json.loads(serialized)
                 for patch in patches:
@@ -207,6 +209,42 @@ class MigrationTests(unittest.TestCase):
             self.manager.apply(self.state, self.rule, request)
         update.assert_not_called()
         self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'retired')
+
+    def test_matching_unsaved_settings_cannot_retire_or_restore_kernel_routes(self):
+        plan = self.manager.preview(self.state, self.rule)
+        identity = plan['id']
+        self.manager.apply(self.state, self.rule, {'id': identity, 'stage': 'protect'})
+        backup = self.state['migrations'][identity]['profiles'][0]
+        bus = Mock()
+        bus.networkmanager_owner.return_value = ':1.7'
+        bus.profile_version.return_value = 21
+        bus.settings.side_effect = lambda *_args, **_kwargs: (self.profile['settings'], self.profile['serialized'])
+        metadata = {'Unsaved': True, 'Flags': 0, 'Filename': '/etc/NetworkManager/system-connections/fixture.nmconnection'}
+        bus.properties.return_value = metadata
+        reader = NetworkManagerReader(bus, None)
+        retire = {'id': identity, 'stage': 'retire'}
+
+        with patch.object(reader, 'profiles', self.reader.profiles), patch.object(reader, 'migration_profiles', self.reader.migration_profiles):
+            self.manager.reader = reader
+            self.profile['serialized'], self.profile['settings'] = backup['after'], json.loads(backup['after'])
+            with self.assertRaisesRegex(RuntimeError, 'saved, persistent NetworkManager profile'):
+                self.manager.apply(self.state, self.rule, retire)
+            self.assertNotIn('del', self.kernel.events)
+            self.assertEqual(self.state['migrations'][identity]['stage'], 'failed')
+
+            metadata['Unsaved'] = False
+            self.manager.apply(self.state, self.rule, retire)
+            self.assertIn('del', self.kernel.events)
+            self.assertEqual(self.state['migrations'][identity]['stage'], 'retired')
+
+            metadata['Unsaved'] = True
+            self.profile['serialized'], self.profile['settings'] = backup['before'], json.loads(backup['before'])
+            rollback = {'id': identity, 'stage': 'rollback', 'expected_stage': 'retired'}
+            with self.assertRaisesRegex(RuntimeError, 'saved, persistent NetworkManager profile'):
+                self.manager.apply(self.state, self.rule, rollback)
+            self.assertNotIn('add', self.kernel.events)
+            self.assertIn(self.rule, self.state['rules'])
+        bus.update_settings.assert_not_called()
 
     def test_retirement_rechecks_the_kernel_even_if_the_previous_public_status_was_active(self):
         plan = self.manager.preview(self.state, self.rule)

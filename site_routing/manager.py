@@ -3,7 +3,7 @@ import copy
 import threading
 import time
 
-from .dns_refresh import due_provider, resolve_answer, retain_answer
+from .dns_refresh import DnsResponse, due_provider, resolve_answer, retain_answers
 from .domain import MAX_TRACKED_ADDRESSES
 from .planning import migration_blocks, plan_rules, public_rule, visible_providers
 from .protocol import validate_request
@@ -86,9 +86,13 @@ class RoutingManager:
             if not state['rules'] and not state['kernel']['known'] and not state['kernel']['objects']:
                 self._publish(state)
                 return
-            providers = self.registry.discover()
-            self._reconcile(state, providers)
-            jobs = self._dns_jobs(state['rules'], providers, force_dns) if resolve_dns else []
+            self._reconcile(state, self.registry.discover())
+        if resolve_dns:
+            self.refresh_dns(force_dns)
+
+    def refresh_dns(self, force_dns: bool = False) -> None:
+        with self._mutex, self.store.lock():
+            jobs = self._dns_jobs(self.store.load()['rules'], self._providers, force_dns)
         self._resolve_dns(jobs)
 
     def _dns_jobs(self, rules: list[dict], providers: dict, force: bool) -> list:
@@ -110,20 +114,10 @@ class RoutingManager:
             for identity, revision, domain, provider in jobs:
                 started = self.clock()
                 answer = resolve_answer(self.resolver, domain, provider)
-                answers[identity] = (revision, started, self.clock(), answer)
+                answers[identity] = DnsResponse(revision, started, self.clock(), answer)
             with self._mutex, self.store.lock():
                 state = self.store.load()
-                tracked = set(state['kernel']['known'])
-                for rule in state['rules']:
-                    tracked.update(rule['addresses'])
-                updated = False
-                for rule in state['rules']:
-                    response = answers.get(rule['id'])
-                    if response is not None and response[0] == rule.get('dns_revision', 0):
-                        _, started, finished, answer = response
-                        retain_answer(rule, answer, tracked, started, finished)
-                        updated = True
-                if updated:
+                if retain_answers(state['rules'], answers, set(state['kernel']['known'])):
                     self._reconcile(state, self.registry.discover())
         finally:
             with self._mutex:

@@ -44,16 +44,18 @@ The service queries A and AAAA, follows CNAME answers and uses the smallest
 answer/CNAME TTL. It refreshes after expiry and network/provider events, with
 a ten-second recovery timer and a five-second minimum between attempts for
 each rule. TTLs are bounded to 5–3600 seconds; failures retry after 30 seconds.
-Reconciliation applies cached addresses before background DNS lookups. An add
-or reassignment can look up the affected host without waiting for other rules.
+Network events reconcile cached addresses independently of background DNS
+lookups. An add or reassignment can look up the affected host without waiting
+for other rules.
 Old answers remain protected until the rule is explicitly removed. This avoids
 releasing a cached address during DNS failure, but can retain obsolete addresses.
 
 There are at most 128 rules, 256 retained addresses per rule and 4096 tracked
-addresses globally. An answer that exceeds global capacity reports a DNS error
-on the affected rule. The service still considers addresses already tracked
-when checking for shared-IP conflicts. New unique addresses in that answer
-are outside protection. To reduce a retained set, review and remove its rule,
+addresses globally. At capacity, only admitted addresses enter routing. Every
+answer in the refresh is considered for new admitted addresses, including an
+answer that exceeds global capacity. Shared destinations with different
+targets stay blocked. The affected rule reports a limit if some of its IPs
+could not be tracked. To reduce a retained set, review and remove its rule,
 which releases that rule's protection.
 
 An active NM provider's advertised DNS servers are preferred. When unavailable,
@@ -218,9 +220,11 @@ The confirmation applies to the stage shown in **Check**. If another client
 moves the migration to a different stage, use **Check** again before confirming.
 
 Retirement and rollback check that the profile is stored under `/etc/` without
-unsaved changes or temporary, generated or external flags. The write is bound
-to the verified profile version. If NetworkManager reports a concurrent edit
-or cannot provide a usable version, the migration refuses the write. Older
+unsaved changes or temporary, generated or external flags. The service does
+this before changing legacy kernel routes, even when the profile settings
+already match the expected snapshot. Profile writes are bound to the verified
+version. If NetworkManager reports a concurrent edit or cannot provide a
+usable version, the migration refuses the change. Older
 plans that include policy rules no longer authorize overlaps or retirement.
 For an older plan still at `protected` without
 reviewed route bindings, active profile ownership, or exact saved-entry
