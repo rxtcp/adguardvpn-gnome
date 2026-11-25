@@ -15,7 +15,7 @@ export class AdGuardToggle extends QuickMenuToggle {
     private readonly state = new ConnectionState();
     private readonly monitor: StatusMonitor;
 
-    constructor(onConnectedChanged: (connected: boolean) => void, planetIcon: Gio.Icon) {
+    constructor(onConnectedChanged: (connected: boolean) => void, planetIcon: Gio.Icon, openPreferences: () => void) {
         super({title: 'AdGuard VPN', subtitle: 'Checking status…', gicon: planetIcon, toggleMode: true});
         const selection = new LocationSelection(display => {
             serverMenu.setDefault(display);
@@ -31,6 +31,7 @@ export class AdGuardToggle extends QuickMenuToggle {
             connectFastest: () => { void controller.connect({kind: 'fastest'}); },
             connectFastestInCountry: iso => { void catalog.connectFastestInCountry(iso); },
             refresh: () => { void catalog.load(); },
+            openPreferences,
         });
         // Normalize saved preferences only after the header can receive updates.
         serverMenu.render([]);

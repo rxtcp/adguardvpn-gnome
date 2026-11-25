@@ -66,11 +66,14 @@ if sys.argv[1] == 'install':
             with zipfile.ZipFile(temporary / 'extension.zip') as archive:
                 names = set(archive.namelist())
                 self.assertIn('extension.js', names)
+                self.assertIn('prefs.js', names)
+                self.assertIn('ui/site-routing/page.js', names)
                 self.assertIn('metadata.json', names)
                 self.assertIn('icons/planet-symbolic.svg', names)
                 self.assertEqual(json.loads(archive.read('metadata.json'))['uuid'],
                                  'adguardvpn-toggle@chatgpt.local')
                 self.assertFalse(any(name.endswith(('.ts', '.map')) or name.startswith(('tests/', 'node_modules/')) for name in names))
+                self.assertFalse(any(name.endswith('.py') or name.startswith(('site_routing/', 'routing_system/')) for name in names))
                 for name in names:
                     if name.endswith('.js'):
                         for relative in re.findall(r"from ['\"](\.[^'\"]+)['\"]", archive.read(name).decode()):

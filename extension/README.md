@@ -26,8 +26,27 @@ Local GNOME Shell extension for Fedora Workstation.
 - Connect and disconnect using the normal CLI or the optional protected systemd/Polkit controller.
 - In direct CLI mode, if the CLI needs a password or reports an error, a terminal opens. In protected mode, errors are shown as GNOME notifications.
 - A system panel indicator is displayed while the VPN is connected.
+- **Site Routing…** opens the standard GTK4/libadwaita preferences process.
+  An optional independent system service assigns exact hosts to saved NM VPNs,
+  protected AdGuard or Direct. It blocks known IPs when their target is offline
+  and does not start VPNs automatically. The feature is experimental; real
+  Fedora boot and AdGuard coexistence acceptance remain pending.
 
-The extension itself does not modify NetworkManager, sudoers, or Polkit settings. The optional helper has a separately reviewed, privileged installer.
+The extension installation itself does not modify NetworkManager, sudoers or
+Polkit. The passwordless helper and Site Routing system component have separate
+privileged installers and separate authorization policies.
+
+Site Routing changes require Polkit confirmation. Its IP-based protection does
+not cover unknown cached addresses or application DoH/DoT; shared IPs affect
+other hosts. A URL rule applies to its entire exact host, not only a path.
+The VPN server/control connection requires a separately verified underlay;
+site rules do not add endpoint exceptions. **Check** shows a checked-at time,
+provider reason and the last migration refusal. Ordinary per-destination
+failures keep independently verified rules working, and tunnel recovery is
+retried without restarting the extension.
+See the repository's [Site Routing guide](https://github.com/rxtcp/adguardvpn-gnome/blob/main/docs/site-routing.md)
+for installation, migration/rollback, statuses and limitations. The extension
+ZIP contains the preferences UI, not the privileged routing service.
 
 **Why sudo may still request a password:** The normal AdGuard VPN CLI uses `sudo` for privileged TUN operations. The project now includes an *experimental*, opt-in protected helper; see `../docs/privileged-helper.md`. Never configure `NOPASSWD: ALL`.
 
@@ -62,6 +81,31 @@ gnome-extensions enable adguardvpn-toggle@chatgpt.local
 Open GNOME Quick Settings from the Wi-Fi/sound/power area at the top right. The **AdGuard VPN** toggle should appear.
 
 If the toggle is missing, install the **Extensions** application (`sudo dnf install gnome-extensions-app`) and verify that the extension is enabled.
+
+## Uninstallation
+
+From the repository root, remove Site Routing first if installed:
+
+```bash
+sudo ./scripts/uninstall-site-routing.sh
+```
+
+Remove its rules in preferences before running that command. The uninstaller
+refuses remaining rules/protection. The explicit `--release-rules` option
+releases all users' rules to ordinary system routing; it is not a migration
+rollback. If cleanup fails, guards and integration files remain. State and
+backups at `/var/lib/adguardvpn-site-routing` remain after successful removal.
+
+Then remove the extension as your desktop user, without `sudo`:
+
+```bash
+./scripts/uninstall-extension.sh
+```
+
+Log out/in to unload it. This alone does not disconnect a VPN or remove either
+optional system component. For helper removal and optional permanent deletion
+of saved settings/login/state, follow the
+[main removal instructions](https://github.com/rxtcp/adguardvpn-gnome#uninstallation).
 
 ## Troubleshooting
 

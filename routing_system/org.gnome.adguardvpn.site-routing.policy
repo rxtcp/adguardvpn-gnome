@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>AdGuard VPN GNOME community project</vendor>
+  <vendor_url>https://github.com/rxtcp/adguardvpn-gnome</vendor_url>
+  <action id="org.gnome.adguardvpn.site-routing.read">
+    <description>Read your Site Routing rules and available connections</description>
+    <message>Read your Site Routing state</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>yes</allow_active></defaults>
+  </action>
+  <action id="org.gnome.adguardvpn.site-routing.modify">
+    <description>Change Site Routing rules for known destination addresses</description>
+    <message>Authentication is required to change system routing for this host</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin</allow_active></defaults>
+  </action>
+</policyconfig>

@@ -10,6 +10,7 @@ and applicable higher-priority instructions; preserve unrelated working changes.
 - [docs/development.md](docs/development.md): architecture, tests and desktop checks.
 - [docs/behavior-contract.md](docs/behavior-contract.md): behavior to preserve during refactoring.
 - [docs/privileged-helper.md](docs/privileged-helper.md): read before changing the helper, Polkit or privileged scripts.
+- [docs/site-routing.md](docs/site-routing.md) and [docs/site-routing-acceptance.md](docs/site-routing-acceptance.md): read before changing routing, DNS, migration or the new system service.
 
 Inspect the relevant implementation and tests before editing. Work from the
 current target branch; check whether an earlier PR was merged before reusing
@@ -50,6 +51,8 @@ fixtures synthetic and independent of an installed VPN or desktop session.
   in `src/application/`, and widgets and navigation in `src/ui/`.
 - Keep `src/extension.ts` focused on enable/disable and panel integration.
   Clean up timers, cancellation handlers and UI resources during shutdown.
+- Keep `src/prefs.ts` as the separate standard preferences entry. Site Routing
+  domain, platform, application and UI modules follow the same layer boundaries.
 - Keep the privileged controller in Python and self-contained unless the task
   explicitly requires redesigning its installation and trust boundary.
 - Use `.js` suffixes for relative runtime imports in TypeScript and `import type`
@@ -78,15 +81,24 @@ fixtures synthetic and independent of an installed VPN or desktop session.
 - Do not commit credentials, login profiles, keys, machine logs, real corporate
   routes or the proprietary AdGuard executable. Keep existing user and corporate
   VPN configuration outside the scope of ordinary extension changes.
+- Site Routing changes require their separate interactive Polkit action.
+  Preserve guard-before-allow, stable identities, exact owned cleanup, private
+  write-ahead state and explicit known-IP limits. Never silently release a
+  known IP on DNS/provider failure. Reject unverified IPv6 and ambiguous paths.
+- NM migration must show the exact diff and retain a verified non-secret backup.
+  Protect, retire and rollback are distinct authorized changes. Matching only
+  an address is insufficient permission to delete a foreign route/rule.
 
 ## Verification commands
 
 For a fresh checkout, use Node.js 22.18 or newer and install the development
-dependencies. Use an isolated Python environment as needed by the host:
+dependencies. Use the system Python with native Gio/GLib bindings installed
+(`python3-gobject` on Fedora or `python3-gi` on Ubuntu):
 
 ```bash
 npm ci
-python3 -m pip install -r requirements-dev.txt
+python3 -m venv --system-site-packages .tmp/python-env
+.tmp/python-env/bin/python -m pip install -r requirements-dev.txt
 ```
 
 For a focused extension test during development:
@@ -103,16 +115,24 @@ and Python archive checks both rebuild `dist/`.
 ```bash
 npm run typecheck
 npm run test:coverage
-PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run -m unittest discover -s tests -v
-python3 -m coverage report
+PYTHONDONTWRITEBYTECODE=1 .tmp/python-env/bin/python -m coverage run -m unittest discover -s tests -v
+.tmp/python-env/bin/python -m coverage report
 for script in scripts/*.sh helper/client.sh; do
     bash -n "$script" || exit 1
 done
-python3 -c 'import xml.etree.ElementTree as ET; ET.parse("helper/org.gnome.adguardvpn.control.policy")'
+python3 - <<'PY'
+from pathlib import Path
+import xml.etree.ElementTree as ET
+for path in [*Path('helper').glob('*.policy'), *Path('routing_system').glob('*.policy'), *Path('routing_system').glob('org*.conf')]:
+    ET.parse(path)
+PY
 ```
 
 Maintain 100% line, branch and function coverage of the compiled extension and
-100% statement and branch coverage of `helper/control.py`, as enforced by CI.
+100% statement and branch coverage of `helper`, `site_routing` and
+`routing_system`, as enforced by CI. Native variants use a fake connection;
+unit tests must not contact the host system bus. Use the isolated namespace CI
+job for real `ip`/`nft` testing; never run its entry in the host namespace.
 Do not lower thresholds, hide executable code from coverage or replace failing
 assertions with skips to make a change pass. For documentation-only changes,
 validate links, referenced paths, command syntax and `git diff --check`; new
@@ -132,3 +152,6 @@ runtime tests are not required.
   limitations. Report failed or unavailable checks honestly. Mocked tests do
   not establish live GNOME, Polkit, TUN, routing or DNS compatibility; distinguish
   automated results from an actual desktop smoke test.
+- Site Routing stays experimental until the documented Fedora acceptance run
+  passes, particularly AC-03/04/06/11. Unit coverage and network namespaces do
+  not prove AdGuard TUN/AUTO coexistence or early boot protection.

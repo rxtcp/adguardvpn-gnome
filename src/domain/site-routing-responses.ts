@@ -1,0 +1,84 @@
+import {isRoutingStatus, record} from './site-routing.js';
+import type {MigrationPlan, ObservedRoute, RoutingDiagnostics, RoutingRule, RoutingTarget, VpnProvider} from './site-routing-types.js';
+
+function text(value: unknown, maximum = 4096): string {
+    if (typeof value !== 'string' || value.length > maximum)
+        throw new Error('Invalid Site Routing text field.');
+    return value;
+}
+
+function count(value: unknown): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+        throw new Error('Invalid Site Routing numeric field.');
+    return value;
+}
+
+function boolean(value: unknown): boolean {
+    if (typeof value !== 'boolean')
+        throw new Error('Invalid Site Routing boolean field.');
+    return value;
+}
+
+function identity(value: unknown): string {
+    const result = text(value, 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(result))
+        throw new Error('Invalid Site Routing identity.');
+    return result;
+}
+
+export function target(value: unknown): RoutingTarget {
+    const item = record(value);
+    if (item.kind === 'networkmanager')
+        return {kind: item.kind, id: identity(item.id)};
+    if ((item.kind === 'direct' && item.id === 'direct') || (item.kind === 'adguard' && item.id === 'adguardvpn-gnome'))
+        return {kind: item.kind, id: item.id};
+    throw new Error('Invalid Site Routing provider.');
+}
+
+export function list<T>(value: unknown, parse: (item: unknown) => T, maximum = 128): T[] {
+    if (!Array.isArray(value) || value.length > maximum)
+        throw new Error('Invalid Site Routing list.');
+    return value.map(parse);
+}
+
+export function provider(value: unknown): VpnProvider {
+    const item = record(value);
+    return {target: target(item.target), name: text(item.name), active: boolean(item.active),
+        detail: text(item.detail), ipv4: boolean(item.ipv4), ipv6: boolean(item.ipv6)};
+}
+
+export function rule(value: unknown): RoutingRule {
+    const item = record(value);
+    if (!isRoutingStatus(item.status))
+        throw new Error('Invalid Site Routing status.');
+    return {id: identity(item.id), domain: text(item.domain, 253), target: target(item.target),
+        status: item.status, detail: text(item.detail), ipv4_count: count(item.ipv4_count),
+        ipv6_count: count(item.ipv6_count), updated_at: count(item.updated_at)};
+}
+
+function route(value: unknown): ObservedRoute {
+    const item = record(value);
+    const result: ObservedRoute = {address: text(item.address, 45)};
+    for (const key of ['dev', 'gateway', 'type'] as const) {
+        if (item[key] !== undefined)
+            result[key] = text(item[key]);
+    }
+    if (item.table !== undefined)
+        result.table = typeof item.table === 'number' ? count(item.table) : text(item.table);
+    return result;
+}
+
+export function diagnostics(value: unknown): RoutingDiagnostics {
+    const item = record(value);
+    let migration: MigrationPlan | null = null;
+    if (item.migration !== null) {
+        const plan = record(item.migration);
+        migration = {id: identity(plan.id), stage: text(plan.stage, 32), changes: list(plan.changes, entry => text(entry), 4096),
+            detail: plan.detail === undefined ? '' : text(plan.detail),
+            rollback_only: plan.rollback_only === undefined ? false : boolean(plan.rollback_only)};
+    }
+    return {rule: rule(item.rule), addresses: list(item.addresses, address => text(address, 45), 256),
+        routes: list(item.routes, route, 256), protection: text(item.protection), migration,
+        checked_at: item.checked_at === undefined || item.checked_at === null ? null : count(item.checked_at),
+        provider: item.provider === undefined || item.provider === null ? null : provider(item.provider)};
+}

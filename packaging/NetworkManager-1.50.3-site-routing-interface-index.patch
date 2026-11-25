@@ -1,0 +1,65 @@
+--- a/src/core/nm-ip-config.c
++++ b/src/core/nm-ip-config.c
+@@ -32,6 +32,7 @@
+ #define NM_IP_CONFIG_GATEWAY      "gateway"
+ #define NM_IP_CONFIG_ROUTE_DATA   "route-data"
+ #define NM_IP_CONFIG_SEARCHES     "searches"
++#define NM_IP_CONFIG_INTERFACE_INDEX "interface-index"
+ 
+ /*****************************************************************************/
+ 
+@@ -40,6 +41,7 @@
+ NM_GOBJECT_PROPERTIES_DEFINE_FULL(_ip,
+                                   NMIPConfig,
+                                   PROP_IP_L3CFG,
++                                  PROP_IP_INTERFACE_INDEX,
+                                   PROP_IP_ADDRESS_DATA,
+                                   PROP_IP_GATEWAY,
+                                   PROP_IP_ROUTE_DATA,
+@@ -168,6 +170,9 @@
+     int                v_i;
+ 
+     switch (prop_id) {
++    case PROP_IP_INTERFACE_INDEX:
++        g_value_set_int(value, nm_l3cfg_get_ifindex(priv->l3cfg));
++        break;
+     case PROP_IP_ADDRESS_DATA:
+         g_value_set_variant(value, priv->v_address_data);
+         break;
+@@ -315,6 +320,16 @@
+                              "",
+                              G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
+ 
++    /* The L3 configuration belongs to one kernel interface for its lifetime. */
++    obj_properties_ip[PROP_IP_INTERFACE_INDEX] =
++        g_param_spec_int(NM_IP_CONFIG_INTERFACE_INDEX,
++                         "",
++                         "",
++                         0,
++                         G_MAXINT,
++                         0,
++                         G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
++
+     obj_properties_ip[PROP_IP_ADDRESS_DATA] =
+         g_param_spec_variant(NM_IP_CONFIG_ADDRESS_DATA,
+                              "",
+@@ -494,6 +509,9 @@
+                                                            "aa{sv}",
+                                                            NM_IP_CONFIG_ADDRESS_DATA),
+             NM_DEFINE_DBUS_PROPERTY_INFO_EXTENDED_READABLE("Gateway", "s", NM_IP_CONFIG_GATEWAY),
++            NM_DEFINE_DBUS_PROPERTY_INFO_EXTENDED_READABLE("InterfaceIndex",
++                                                           "i",
++                                                           NM_IP_CONFIG_INTERFACE_INDEX),
+             NM_DEFINE_DBUS_PROPERTY_INFO_EXTENDED_READABLE(
+                 "Routes",
+                 "aau",
+@@ -633,6 +651,9 @@
+                                                            "aa{sv}",
+                                                            NM_IP_CONFIG_ADDRESS_DATA),
+             NM_DEFINE_DBUS_PROPERTY_INFO_EXTENDED_READABLE("Gateway", "s", NM_IP_CONFIG_GATEWAY),
++            NM_DEFINE_DBUS_PROPERTY_INFO_EXTENDED_READABLE("InterfaceIndex",
++                                                           "i",
++                                                           NM_IP_CONFIG_INTERFACE_INDEX),
+             NM_DEFINE_DBUS_PROPERTY_INFO_EXTENDED_READABLE(
+                 "Routes",
+                 "a(ayuayu)",

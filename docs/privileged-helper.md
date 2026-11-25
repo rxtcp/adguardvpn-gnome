@@ -6,6 +6,14 @@ disconnect worked. It has **not** undergone an independent security audit or
 automated integration testing. Review privileged scripts before installing
 and verify routes/DNS on your own machine.
 
+The experimental [Site Routing](site-routing.md) manager is a separate optional
+system component. It reads this helper's confirmed status and identifies TUN
+descriptors belonging to the fixed, root-owned service executable. It does not
+change this helper's connect/disconnect policy, parse/copy the normal user
+profile or modify AdGuard site exclusions. Assignments are enforced by separate
+kernel routing and firewall guards, including when AdGuard is unavailable.
+The new feature's real Fedora acceptance remains pending.
+
 ## Threat model and background
 
 - AdGuard VPN CLI's TUN mode needs administrator rights and can internally invoke `sudo` with dynamically constructed arguments.
@@ -157,6 +165,12 @@ fixes an overly strict early installer version which refused a legitimate
 
 To remove the opt-in feature:
 
+If removing all components, remove Site Routing first using
+[its uninstall/rollback procedure](site-routing.md#uninstall-and-retained-data).
+Removing only this helper leaves Site Routing installed; its protected-AdGuard
+assignments become `provider-missing` and known IPs stay blocked. Reassign or
+remove those rules in preferences if ordinary routing is wanted.
+
 ```bash
 sudo ./scripts/uninstall-helper.sh
 ```
@@ -166,6 +180,11 @@ leaves the private login data at `/var/lib/adguardvpn-gnome` for manual review
 and deletion later. The original AdGuard CLI, GNOME extension and corporate
 VPN are left intact. The extension falls back to its prior direct-CLI behavior
 after reload.
+
+The Site Routing journal and private migration backups live separately in
+`/var/lib/adguardvpn-site-routing`. They are not this helper's login profile
+and are not removed by `uninstall-helper.sh`. Conversely, uninstalling Site
+Routing does not delete `/var/lib/adguardvpn-gnome` or its credentials.
 
 ## Compatibility checkpoint
 

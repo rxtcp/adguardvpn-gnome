@@ -9,7 +9,7 @@ export default class AdGuardVpnQuickToggleExtension extends Extension {
 
     override enable(): void {
         const file = this.dir.get_child('icons').get_child('planet-symbolic.svg');
-        this.indicator = new AdGuardIndicator(new Gio.FileIcon({file}));
+        this.indicator = new AdGuardIndicator(new Gio.FileIcon({file}), () => { void this.openPreferences(); });
         Main.panel.statusArea.quickSettings!.addExternalIndicator(this.indicator);
     }
 

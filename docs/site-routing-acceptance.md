@@ -1,0 +1,105 @@
+# Site Routing acceptance record
+
+The [specification](site-routing-spec.md) requires a complete bench run and
+separate confirmation of AC-03, AC-04, AC-06 and AC-11 on real Fedora before
+release. A preliminary [Fedora run was reported in review](https://github.com/rxtcp/adguardvpn-gnome/pull/4#issuecomment-7106099077)
+and **did not pass acceptance**. It confirmed one offline deny with stale NM
+activation, and identified incomplete route recovery/migration and a possible
+VPN control-plane underlay problem. Socket egress was not captured, and the
+cause of all OpenVPN reconnects/DNS failures remains unproved.
+
+This implementation remains experimental. The table distinguishes executable
+test evidence from remaining live work. No workstation VPN or routing
+configuration was changed by the implementation tools.
+
+**TUN/AUTO prerequisite:** [SR-UNDERLAY-01](vpn-underlay-prerequisite.md).
+There is an experimental, opt-in marked launcher for a reviewed direct OpenVPN
+profile and uplink. The TUN/NONE setup remains available for site-only AdGuard.
+Both modes need live verification.
+
+## Automated evidence
+
+The extension test runner executes compiled TypeScript with deterministic GNOME
+and D-Bus adapters. Python tests use temporary state, fake system processes and
+real Gio/GLib variants with an injected bus. CI enforces 100% extension
+line/branch/function and Python statement/branch coverage, including the new
+manager and installed bootstrap; it does not exclude the privileged code.
+
+The adapter regressions cover stale VPN activations with reused interface
+names and addresses across manager restart, NetworkManager profile edits during
+migration, and saved selectors without a matching live policy. An older
+protected migration can get a fresh diff with its assignment and known IPs
+intact. Rollback tests cover a protected plan with a reused tunnel name, a crash
+between kernel deletion and saving its outcome, continued blocking after
+restart with either journal format, and a confirmation that becomes stale
+during retirement. Namespace tests exercise IPv4 and IPv6 route changes by
+interface index and verify that name reuse after review or around deletion
+leaves the unrelated interface's route in place. The migration tests also
+verify active NetworkManager profile ownership for each reviewed route and
+refuse profile writes when that ownership changes. A namespace test verifies
+that an identical route on a different interface becomes a conflict while an
+independent destination retains its verified path.
+Installer checks cover update and removal dependency ordering.
+CI builds the NetworkManager patch that exports the interface index.
+
+The separate `routing-namespace` CI job runs the real `ip` and `nft` programs
+inside a new root Linux network namespace, using synthetic dummy interfaces
+and documentation addresses. It verifies IPv4/IPv6 route selection, terminal
+denies after tunnel removal, an independent nftables deny against an earlier
+foreign lookup, interface-index replacement, owned cleanup and deny-only
+restoration. Separate synthetic corporate/AdGuard interfaces now cover a legacy
+conflict beside an independent destination, an actual missing-device write,
+continued independent egress and recovery on a new source/interface. Each case
+creates its own child namespace and refuses the parent namespace. These are Linux
+policy tests, not an OpenVPN, AdGuard or Fedora boot smoke test.
+
+The AUTO lookup reproduction still selects AdGuard ahead of physical host
+routes for two synthetic endpoints. A separate TUN/NONE topology test captures
+IPv4 and IPv6 UDP packets at an uplink peer as remotes change address and port.
+It also checks selected site routes and continued protection after TUN loss.
+The marked AUTO namespace test captures marked IPv4 and IPv6 UDP and TCP SYN
+traffic at the approved peer. It checks unchanged unmarked selection, marked
+denial after loss of the dedicated route, and known-site conflict protection.
+
+| Criterion | Automated evidence | Required live Fedora check |
+| --- | --- | --- |
+| AC-01 | Prefs add flow, IDNA, strict API and owner persistence. | Add through actual GTK and Polkit dialog. |
+| AC-02 | Both families planned, kernel route lookup verified in namespace. | Confirm actual selected VPN egress. |
+| AC-03 | Interface removed in namespace; RPDB and independent egress guard deny fallback. | One offline deny was reported; **critical** repeated disconnect and recovery captures remain required. |
+| AC-04 | Activated-without-tunnel has an explicit reason; Check re-reconciles and timestamps its provider/routes. | Reported stale activation was correctly blocked; **critical** synchronized recovery retest remains required. |
+| AC-05 | UUID survives profile rename and new interface/index; namespace reconnect. | Reconnect real VPN with a different interface name. |
+| AC-06 | AUTO lookup reproduction, TUN/NONE egress, marked AUTO egress and fail-closed uplink loss in namespaces. | Verify actual marked OpenVPN sockets, packet egress and reconnects with the patched Fedora packages and protected AdGuard. |
+| AC-07 | A/AAAA/CNAME TTL, retained old IPs, DNS errors, rate and size limits. | Controlled DNS change with both VPNs and caches. |
+| AC-08 | Shared IP and IPv4-mapped IPv6 conflicts never select a winner. | Two test names sharing addresses, different assignments. |
+| AC-09 | Physical interface and gateway discovery, explicit route arguments. | Confirm direct egress while both VPNs are active. |
+| AC-10 | Removed/private provider retains known addresses with no allow path. | Remove a disposable saved NM profile. |
+| AC-11 | Persisted intent, pending-object recovery, early restore order, worker/daemon lifecycle. | **Critical:** restart manager/NM and reboot Fedora; measure early-start traffic. |
+| AC-12 | Only exact owned objects deleted; unrelated namespace rule retained. | Confirm unrelated connections after GUI removal. |
+| AC-13 | Empty manager/restore path makes no network writes. | Compare actual empty-install networking. |
+| AC-14 | Invalid input/UUID/kernel fields rejected before privileged work. | Exercise UI against installed daemon. |
+| AC-15 | Actual bus sender, narrow actions and interactive modify flags verified. | Confirm active/inactive/other-user Polkit behavior. |
+| AC-16 | Per-address failures preserve independent paths, pending intent and actionable operation reasons; restored service starts unverified. | Retest with synchronized manager/NM logs and actual sockets. |
+| AC-17 | Exact diff/backup; fresh pre/post-retirement proof; refusal reason/stage; independent-rule recovery and rollback. | Reported migration remained protected; repeat retirement/rollback only with a verified replacement. |
+| AC-18 | Missing IPv6 path blocks the whole assignment; real IPv6 deny/route tests. | Disable/break IPv6 on the target and inspect actual traffic. |
+
+## Reproduce release validation
+
+Use a disposable Fedora Workstation with a local GNOME session, SELinux enforcing,
+an independently managed NM test VPN and an authenticated protected AdGuard
+profile. Keep credentials and personal/corporate routes outside this repository.
+Install using [site-routing.md](site-routing.md); exercise the matrix with
+IPv4/IPv6 enabled and both VPNs independently available.
+
+Record Fedora/GNOME/NetworkManager/CLI versions, nftables/firewall coexistence,
+the tested revisions and observed results. For AC-03/04/06/11, observe traffic
+from a separate controlled peer or capture point across disconnects and boot;
+a post-boot `ip route get` alone cannot establish the absence of an earlier
+window. Validate that the guard/NM ordering has no unit cycle on the target,
+that SELinux permits the fixed protected-process inspection, and that shutdown
+or startup failure leaves protection explicit. Networking in an initramfs
+requires additional early protection or a documented failed acceptance result.
+
+Test both uninstall refusal with retained rules and explicit release; restore
+legacy settings using the migration rollback before removal when needed.
+Do not mark this record complete or publish a release until all rows have live
+results and the critical scenarios pass. Attach sanitized evidence only.
