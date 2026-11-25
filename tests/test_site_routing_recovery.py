@@ -21,8 +21,11 @@ class RecoveringKernel(KernelFixture):
         if arguments[:2] == ('address', 'show'):
             return [] if self.path is None else [{'ifindex': self.path.ifindex, 'flags': ['UP'],
                 'addr_info': [{'local': self.path.source}]}]
-        if arguments[:2] == ('route', 'get') and not any(row['dst'].split('/')[0] == arguments[2] for row in self.current[family]['route']):
-            raise RuntimeError('IPv4 route lookup is unreachable.')
+        if arguments[:2] == ('route', 'get'):
+            routes = [row for row in self.current[family]['route'] if row['dst'].split('/')[0] == arguments[2]]
+            if not routes:
+                raise RuntimeError('IPv4 route lookup is unreachable.')
+            return [next((row for row in routes if row['protocol'] == '196'), routes[0])]
         return super().read_ip(family, *arguments)
 
     def write_ip(self, family, *arguments):
@@ -182,10 +185,13 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.assertIn('no verified kernel tunnel', diagnosis['provider']['detail'])
 
     def test_protected_migration_and_independent_rule_recover_then_retire_only_after_fresh_verification(self):
-        legacy = {'dst': '198.51.100.8/32', 'table': 777, 'priority': 900, 'protocol': 'static'}
-        self.runner.current[4]['rule'].append(legacy)
-        profile = {'uuid': TARGET['id'], 'name': 'Fixture VPN', 'users': (), 'settings': {
-            'ipv4': {'routing-rules': [{'to': '198.51.100.8', 'to-len': 32, 'table': 777, 'priority': 900}]}}}
+        legacy = {'dst': '198.51.100.8/32', 'table': 777, 'dev': 'fixturelegacy', 'protocol': 'static'}
+        self.runner.current[4]['route'].append(legacy)
+        self.runner.legacy_route_index = Mock(side_effect=lambda item: 18 if item['data'] in self.runner.current[4]['route'] else None)
+        self.runner.change_legacy_route = Mock(side_effect=lambda item, *_: self.runner.current[4]['route'].remove(item['data']))
+        profile = {'uuid': TARGET['id'], 'name': 'Fixture VPN', 'users': (), 'interfaces': ['fixturelegacy'],
+                   'interface_indices': {4: (18,)}, 'settings': {
+                       'ipv4': {'route-data': [{'dest': '198.51.100.8', 'prefix': 32, 'table': 777}]}}}
         profile['serialized'] = json.dumps(profile['settings'])
         class Reader:
             def profiles(self): return [profile]
@@ -206,10 +212,10 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.manager.handle(request, 1000, 'fixtureuser')
         self.assertEqual(set(self.statuses().values()), {'active'})
         self.assertEqual(self.store.state['migrations'][plan['id']]['stage'], 'protected')
-        self.runner.path = None; self.runner.current[4]['route'] = []
+        self.runner.path = None; self.runner.current[4]['route'] = [legacy]
         request['migration']['stage'] = 'retire'
         with self.assertRaisesRegex(ValueError, 'not verified'): self.manager.handle(request, 1000, 'fixtureuser')
-        self.assertIn(legacy, self.runner.current[4]['rule'])
+        self.assertIn(legacy, self.runner.current[4]['route'])
         replacement = NetworkPath('fixturevpn2', 27, '192.0.2.4')
         self.runner.path = replacement
         self.registry.providers[0] = Provider(Target.parse(TARGET), 'Fixture VPN', {4: replacement})
@@ -220,15 +226,15 @@ class RoutingRecoveryTests(unittest.TestCase):
         self.assertIn('Migration: protected', diagnosis['rule']['detail'])
         self.manager.handle(request, 1000, 'fixtureuser')
         self.assertEqual(self.store.state['migrations'][plan['id']]['stage'], 'retired')
-        self.assertEqual(profile['settings']['ipv4']['routing-rules'], [])
-        self.assertNotIn(legacy, self.runner.current[4]['rule'])
+        self.assertEqual(profile['settings']['ipv4']['route-data'], [])
+        self.assertNotIn(legacy, self.runner.current[4]['route'])
         self.assertEqual(set(self.statuses().values()), {'active'})
         before = self.store.load()
         request['migration'] = {'id': plan['id'], 'stage': 'rollback', 'expected_stage': 'protected'}
         with self.assertRaisesRegex(ValueError, 'stage changed.*Check'):
             self.manager.handle(request, 1000, 'fixtureuser')
         self.assertEqual(self.store.load(), before)
-        self.assertNotIn(legacy, self.runner.current[4]['rule'])
+        self.assertNotIn(legacy, self.runner.current[4]['route'])
 
     def test_protected_rollback_never_adds_a_route_to_a_tunnel_that_reused_the_name(self):
         legacy = {'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static',

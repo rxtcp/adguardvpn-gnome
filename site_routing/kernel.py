@@ -143,6 +143,8 @@ class KernelBackend:
     def change_legacy(self, item: dict, action: str, *, binding: dict | None = None, before_delete=None) -> dict | None:
         arguments = legacy_arguments(item, action)
         route = item['kind'] == 'route'
+        if not route and action == 'del':
+            raise ValueError('Ownership of a legacy routing rule cannot be verified for deletion.')
         index = self.runner.legacy_route_index(item) if route else None
         present = index is not None if route else self._legacy_rule_present(item)
         if action == 'del' and not present:

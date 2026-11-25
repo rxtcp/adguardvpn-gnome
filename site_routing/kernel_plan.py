@@ -20,14 +20,13 @@ def prepare_policy(assignments: dict, journal: dict, snapshots: dict, previous: 
                    approved, route_binding) -> PolicyPlan:
     approvals = defaultdict(list)
     for item in approved:
-        approvals[signature(item['kind'], item['family'], item['data'])].append(item)
+        if item['kind'] == 'route':
+            approvals[signature('route', item['family'], item['data'])].append(item)
     failures = {}
     candidates = {address: item for address, item in assignments.items() if item.path}
     for overlap in foreign_overlaps(snapshots, previous, candidates):
         matching = approvals.get(signature(overlap['kind'], overlap['family'], overlap['data']), ())
         if matching:
-            if overlap['kind'] == 'rule':
-                continue
             binding = route_binding(overlap)
             if binding is not None and any(item.get('route_binding') == binding for item in matching):
                 continue

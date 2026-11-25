@@ -26,17 +26,11 @@ class MigrationMatchingTests(unittest.TestCase):
         self.assertEqual(entry_address(6, 'routing-rules', {'to': '2001:db8::8', 'to-len': 128}), '2001:db8::8')
         self.assertEqual(settings_hash({'bytes': b'fixture'}), settings_hash({'bytes': list(b'fixture')}))
 
-    def test_rule_matching_checks_saved_selectors_and_never_matches_another_host(self):
+    def test_rule_matching_refuses_identical_rules_without_ownership(self):
         live = {'kind': 'rule', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'table': 777, 'priority': 900, 'protocol': 'static'}}
         row = {'to': '198.51.100.8', 'to-len': 32, 'table': 777, 'priority': 900}
         profile = {'settings': {'ipv4': {'routing-rules': [row]}}}
-        self.assertTrue(matches_profile(live, profile))
-        for changed in ({'to': '198.51.100.9'}, {'priority': 901}, {'table': 778}, {'from': '192.0.2.1'}, {'fwmark': 1},
-                        {'family': socket.AF_INET6}, {'to': '198.51.100.8/32', 'to-len': 31},
-                        {'from-len': 8}, {'action': 7}):
-            self.assertFalse(matches_profile(live, {'settings': {'ipv4': {'routing-rules': [{**row, **changed}]}}}))
-        self.assertFalse(matches_profile({**live, 'data': {**live['data'], 'protocol': 99}}, profile))
-        self.assertFalse(matches_profile({**live, 'data': {**live['data'], 'dst': '198.51.100.8/31'}}, profile))
+        self.assertFalse(matches_profile(live, profile))
 
     def test_route_matching_checks_interface_gateway_source_metric_table_and_legacy_arrays(self):
         live = {'kind': 'route', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'table': 777,
@@ -44,6 +38,8 @@ class MigrationMatchingTests(unittest.TestCase):
         row = {'dest': '198.51.100.8', 'prefix': 32, 'next-hop': '192.0.2.1', 'metric': 20, 'table': 777}
         profile = {'interfaces': ['fixturevpn'], 'settings': {'ipv4': {'route-data': [row]}}}
         self.assertTrue(matches_profile(live, profile))
+        self.assertFalse(matches_profile({**live, 'data': {**live['data'], 'protocol': 99}}, profile))
+        self.assertFalse(matches_profile({**live, 'data': {**live['data'], 'dst': '198.51.100.8/31'}}, profile))
         self.assertFalse(matches_profile(live, {**profile, 'interfaces': ['other']}))
         for changed in ({'table': 778}, {'next-hop': '192.0.2.9'}, {'metric': 21}, {'src': '192.0.2.3'},
                         {'type': 'blackhole'}, {'onlink': True}):

@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 import unittest
 from unittest.mock import Mock
 
@@ -59,6 +61,83 @@ class RoutingManagerTests(unittest.TestCase):
         self.manager.refresh(force_dns=True)
         self.assertEqual(self.manager.rules(1000)[0]['status'], 'dns-error')
         self.assertIn('198.51.100.8', self.kernel.calls[-1][1])
+
+    def test_adding_a_rule_does_not_refresh_other_rules_with_valid_dns(self):
+        for index in range(32):
+            domain = f'cached-{index}.example'
+            self.resolver.answers[domain] = (('198.51.100.9',), 60)
+            self.add(domain)
+        self.now += 5
+        self.resolver.calls.clear()
+        original = self.resolver.resolve
+
+        def slow_lookup(domain, provider):
+            self.now += 4
+            return original(domain, provider)
+
+        self.resolver.resolve = slow_lookup
+        started = self.now
+        self.add('two.example')
+        self.assertEqual([domain for domain, _ in self.resolver.calls], ['two.example'])
+        self.assertEqual(self.now - started, 4)
+
+    def test_cached_reassignment_applies_while_background_dns_is_blocked(self):
+        rule = self.add()
+        self.now += 60
+        started, finish = Event(), Event()
+
+        def slow_lookup(_domain, _provider):
+            started.set()
+            finish.wait(5)
+            return ('198.51.100.99',), 60
+
+        self.resolver.resolve = slow_lookup
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            background = executor.submit(self.manager.refresh)
+            try:
+                self.assertTrue(started.wait(2))
+                edit = executor.submit(self.manager.handle, {'operation': 'update-rule', 'id': rule['id'],
+                    'domain': rule['domain'], 'target': {'kind': 'direct', 'id': 'direct'}}, 1000, 'fixtureuser')
+                self.assertEqual(edit.result(timeout=2)['rule']['target']['kind'], 'direct')
+                self.assertIsNone(self.kernel.calls[-1][1]['198.51.100.8'].path)
+                self.assertFalse(background.done())
+            finally:
+                finish.set()
+            background.result(timeout=2)
+        self.assertNotIn('198.51.100.99', self.store.state['rules'][0]['addresses'])
+
+    def test_exceeding_total_address_capacity_only_reports_dns_error_for_that_rule(self):
+        for index in range(16):
+            domain = f'capacity-{index}.example'
+            addresses = tuple(f'2001:db8::{value:x}' for value in range(256 * index + 1, 256 * (index + 1) + 1))
+            self.resolver.answers[domain] = (addresses, 60)
+            self.add(domain)
+        self.resolver.answers['two.example'] = (('198.51.100.99',), 60)
+        result = self.add('two.example')
+        self.assertEqual(result['status'], 'dns-error')
+        self.assertIn('total tracked-address limit', result['detail'])
+        self.assertEqual(len(self.store.state['kernel']['known']), 4096)
+        self.assertTrue(all(rule['status'] == 'active' for rule in self.manager.rules(1000) if rule['id'] != result['id']))
+        self.assertTrue(all(call[0] != 'block' for call in self.kernel.calls))
+
+        self.resolver.answers['two.example'] = (('198.51.100.99', '2001:db8::1'), 60)
+        self.now += 30
+        self.manager.refresh()
+        checked = self.manager.diagnose(result['id'], 1000)
+        self.assertEqual(checked['addresses'], ['2001:db8::1'])
+        self.assertIn('total tracked-address limit', checked['rule']['detail'])
+
+    def test_dns_failure_at_the_per_rule_limit_keeps_every_cached_address(self):
+        addresses = tuple(f'2001:db8::{value:x}' for value in range(1, 257))
+        self.resolver.answers['one.example'] = (addresses, 60)
+        self.add()
+        self.now += 60
+        self.resolver.answers['one.example'] = (('198.51.100.99',), 60)
+        self.manager.refresh()
+        rule = self.manager.rules(1000)[0]
+        self.assertEqual(rule['status'], 'dns-error')
+        self.assertIn('too many addresses', rule['detail'])
+        self.assertEqual(set(self.store.state['kernel']['known']), set(addresses))
 
     def test_shared_ip_with_different_target_blocks_all_affected_rules(self):
         first = self.add()

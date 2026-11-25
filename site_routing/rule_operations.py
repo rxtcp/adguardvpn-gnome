@@ -53,4 +53,5 @@ def change_rule(state: dict, request: dict, providers: dict, uid: int, username:
         raise ValueError('Create a new rule to change the hostname, then explicitly remove the old rule.')
     rule['target'], rule['owner_name'] = target.public(), username
     rule['dns_expires'] = 0
+    rule['dns_revision'] = state['revision'] + 1
     return rule

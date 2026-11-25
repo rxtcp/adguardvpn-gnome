@@ -151,7 +151,14 @@ across service restarts until recovery is verified, including with older
 unfinished migration journals. Each reviewed legacy route is bound to an
 active NetworkManager profile, its kernel interface index and the current boot.
 If that proof changes, use **Check** to review a new diff. Reconciliation treats
-routes without a current matching approval as conflicts.
+routes without a current matching approval as conflicts. Overlapping
+destination policy rules require manual review and reconciliation through
+NetworkManager. Retirement and rollback write only saved, persistent NM
+profiles without pending edits.
+
+Rule changes reconcile cached addresses without waiting for a DNS sweep.
+If a DNS answer would exceed the tracked-address limit, the affected rule
+reports the limit and previously tracked IPs remain protected.
 
 Rerunning the Site Routing installer restores known-address protection through
 the manager while keeping the early guard and NetworkManager running.
