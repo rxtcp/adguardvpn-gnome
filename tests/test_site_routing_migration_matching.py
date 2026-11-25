@@ -53,6 +53,8 @@ class MigrationMatchingTests(unittest.TestCase):
         packed = lambda address: struct.unpack('=I', socket.inet_pton(socket.AF_INET, address))[0]
         old = {'settings': {'connection': {'interface-name': 'fixturevpn'}, 'ipv4': {'route-table': 777,
             'routes': [[packed('198.51.100.8'), 32, packed('192.0.2.1'), 20]]}}}
+        self.assertFalse(matches_profile(live, old))
+        old['interfaces'] = ['fixturevpn']
         self.assertTrue(matches_profile(live, old))
         for row in ([packed('198.51.100.8'), 32], [packed('198.51.100.8'), 32, 'bad', 20]):
             self.assertFalse(matches_profile(live, {**old, 'settings': {**old['settings'], 'ipv4': {'routes': [row]}}}))

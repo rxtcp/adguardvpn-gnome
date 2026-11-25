@@ -37,7 +37,7 @@ class KernelBackend:
         snapshots = self.snapshot()
         previous = list(dict.fromkeys(OwnedObject.parse(row) for row in [*journal['objects'], *journal.get('pending_objects', [])]))
         try:
-            plan = prepare_policy(assignments, journal, snapshots, previous, approved)
+            plan = prepare_policy(assignments, journal, snapshots, previous, approved, self._approval_route_binding)
         except (ValueError, RuntimeError):
             self.block(known, installation_id)
             raise
@@ -127,6 +127,12 @@ class KernelBackend:
     def legacy_route_binding(self, item: dict) -> dict | None:
         index = self.runner.legacy_route_index(item)
         return None if index is None else self._route_binding(index)
+
+    def _approval_route_binding(self, item: dict) -> dict | None:
+        try:
+            return self.legacy_route_binding(item)
+        except (OSError, RuntimeError, ValueError):
+            return None
 
     def legacy_present(self, item: dict, *, binding: dict | None = None) -> bool:
         if item['kind'] == 'rule':

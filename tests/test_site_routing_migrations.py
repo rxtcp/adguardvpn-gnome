@@ -15,6 +15,7 @@ class MigrationTests(unittest.TestCase):
         self.state = self.store.state
         self.state['rules'] = [self.rule]
         self.profile = {'uuid': NM_ID, 'name': 'Fixture VPN', 'path': '/fixture/profile', 'users': (), 'interfaces': ['fixturevpn'],
+                        'interface_indices': {4: (17,)},
                         'settings': {'connection': {'id': 'Fixture VPN', 'uuid': NM_ID},
                                      'ipv4': {'route-data': [{'dest': '198.51.100.8', 'prefix': 32},
                                                              {'dest': '203.0.113.0', 'prefix': 24}],
@@ -109,9 +110,47 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(self.profile['settings'], original)
             self.assertEqual(self.kernel.events, [])
             self.assertEqual(restarted['migrations'][plan['id']]['stage'], 'protected')
+            self.assertEqual(self.manager.approved(restarted), [])
+            self.profile['interface_indices'] = {4: (27,)}
             refreshed = self.manager.preview(restarted, restarted['rules'][0])
         self.assertNotEqual(refreshed['id'], plan['id'])
         self.assertTrue(any('index 27' in change for change in refreshed['changes']))
+
+    def test_preview_refuses_an_inactive_profile_that_only_names_the_live_interface(self):
+        self.profile['interfaces'] = []
+        self.profile['interface_indices'] = {}
+        self.profile['settings']['connection']['interface-name'] = 'fixturevpn'
+        self.profile['serialized'] = json.dumps(self.profile['settings'])
+        with patch.object(self.kernel, 'legacy_route_binding', return_value={'ifindex': 27, 'boot_id': 'fixture-boot'}):
+            with self.assertRaisesRegex(ValueError, 'cannot be matched exactly'):
+                self.manager.preview(self.state, self.rule)
+        self.assertEqual(self.state['migrations'], {})
+        self.assertEqual(self.kernel.events, [])
+
+    def test_preview_requires_the_active_profile_index_for_the_routes_address_family(self):
+        self.profile['interface_indices'] = {4: (27,), 6: (17,)}
+        with self.assertRaisesRegex(ValueError, 'not verified for the active NetworkManager profile'):
+            self.manager.preview(self.state, self.rule)
+        self.assertEqual(self.state['migrations'], {})
+
+    def test_retirement_refuses_a_profile_that_no_longer_owns_the_same_interface(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        self.profile['interface_indices'] = {}
+        with patch.object(self.reader, 'update') as update:
+            with self.assertRaisesRegex(ValueError, 'no longer verified for its active NetworkManager profile'):
+                self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        update.assert_not_called()
+        self.assertEqual(self.manager.approved(self.state), [])
+
+    def test_old_plan_without_route_owner_cannot_approve_or_retire_the_route(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        del self.state['migrations'][plan['id']]['overlaps'][1]['route_owner']
+        self.assertEqual(self.manager.approved(self.state), [])
+        with self.assertRaisesRegex(ValueError, 'needs a verified route interface binding'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        self.assertNotEqual(self.manager.preview(self.state, self.rule)['id'], plan['id'])
 
     def test_old_route_plan_requires_a_fresh_review_and_keeps_rollback_if_the_route_is_absent(self):
         plan = self.manager.preview(self.state, self.rule)

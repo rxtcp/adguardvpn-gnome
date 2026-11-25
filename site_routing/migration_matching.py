@@ -38,7 +38,7 @@ def matches_entry(item: dict, profile: dict, field: str, row) -> bool:
         except (ValueError, TypeError, struct.error):
             return False
         saved = {'next-hop': gateway, 'metric': row[3] or -1}
-    interfaces = profile.get('interfaces', []) or [profile['settings'].get('connection', {}).get('interface-name')]
+    interfaces = profile.get('interfaces', [])
     setting = profile['settings'].get(f'ipv{family}', {})
     gateway = saved.get('next-hop', '')
     gateway = '' if gateway in ('0.0.0.0', '::') else gateway

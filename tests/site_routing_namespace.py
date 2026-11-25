@@ -142,6 +142,32 @@ class NamespaceRoutingTests(unittest.TestCase):
         name.assert_called_once_with(original.ifindex)
         self.assertEqual(legacy_routes(), [row])
 
+    def test_reviewed_overlap_becomes_a_conflict_after_its_interface_is_replaced(self):
+        self.command('link', 'set', 'lo', 'up')
+        legacy, _ = self.tunnel()
+        target, _ = self.tunnel('203.0.113.2', '2001:db8:3::2', name='fixtureguard')
+        runner = CommandRunner()
+        backend = KernelBackend(runner)
+        route = ('-4', 'route', 'add', '198.51.100.8/32', 'table', '777',
+                 'dev', legacy.interface, 'proto', 'static', 'metric', '20')
+        self.command(*route)
+        row = next(row for row in runner.read_ip(4, 'route', 'show', 'table', 'all') if row.get('table') == 777)
+        approval = {'kind': 'route', 'family': 4, 'data': row}
+        approval['route_binding'] = backend.legacy_route_binding(approval)
+        assignments = {address: Assignment('target', target) for address in ('198.51.100.8', '198.51.100.9')}
+        journal = {'objects': [], 'known': [], 'tables': {}, 'priority': 0}
+        journal = backend.apply(assignments, journal, INSTALLATION, approved=[approval])
+        self.assertEqual(journal['failures'], {})
+
+        self.command('link', 'del', legacy.interface)
+        replacement, _ = self.tunnel(name=legacy.interface)
+        self.assertNotEqual(replacement.ifindex, legacy.ifindex)
+        self.command(*route)
+        journal = backend.apply(assignments, journal, INSTALLATION, approved=[approval])
+        self.assertEqual(journal['failures']['198.51.100.8']['status'], 'conflict')
+        self.assertNotIn('198.51.100.9', journal['failures'])
+        self.assertEqual(runner.read_ip(4, 'route', 'get', '198.51.100.9')[0]['dev'], target.interface)
+
     def test_independent_conflict_and_real_device_loss_recover_without_releasing_known_ips(self):
         self.command('link', 'set', 'lo', 'up')
         corporate, _corporate6 = self.tunnel()

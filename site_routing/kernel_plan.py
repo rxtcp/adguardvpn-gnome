@@ -1,4 +1,5 @@
 """Plan owned objects while quarantining only unapproved destination overlaps."""
+from collections import defaultdict
 from dataclasses import dataclass
 import ipaddress
 
@@ -16,13 +17,20 @@ class PolicyPlan:
 
 
 def prepare_policy(assignments: dict, journal: dict, snapshots: dict, previous: list,
-                   approved) -> PolicyPlan:
-    approved_ids = {signature(item['kind'], item['family'], item['data']) for item in approved}
+                   approved, route_binding) -> PolicyPlan:
+    approvals = defaultdict(list)
+    for item in approved:
+        approvals[signature(item['kind'], item['family'], item['data'])].append(item)
     failures = {}
     candidates = {address: item for address, item in assignments.items() if item.path}
     for overlap in foreign_overlaps(snapshots, previous, candidates):
-        if signature(overlap['kind'], overlap['family'], overlap['data']) in approved_ids:
-            continue
+        matching = approvals.get(signature(overlap['kind'], overlap['family'], overlap['data']), ())
+        if matching:
+            if overlap['kind'] == 'rule':
+                continue
+            binding = route_binding(overlap)
+            if binding is not None and any(item.get('route_binding') == binding for item in matching):
+                continue
         network = ipaddress.ip_network(overlap['data'].get('dst', overlap['data'].get('to')), strict=False)
         for address in candidates:
             if ipaddress.ip_address(address) in network:

@@ -41,20 +41,29 @@ class NetworkManagerReader:
 
     def migration_profiles(self) -> list[dict]:
         snapshot = self.snapshot()
-        return [{**profile, 'interfaces': [name for active in snapshot['active'] if active['uuid'] == profile['uuid']
-                                           for name in active['interfaces']]} for profile in snapshot['profiles']]
+        active = [row for row in snapshot['active'] if row['state'] == 2]
+        owners = Counter((family, index) for row in active for family, indices in row['interface_indices'].items()
+                         for index in indices)
+        profiles = []
+        for profile in snapshot['profiles']:
+            activations = [row for row in active if row['uuid'] == profile['uuid']]
+            activation = activations[0] if len(activations) == 1 else {}
+            indices = {family: tuple(index for index in binding if owners[family, index] == 1)
+                       for family, binding in activation.get('interface_indices', {}).items()}
+            profiles.append({**profile, 'interfaces': activation.get('interfaces', []), 'interface_indices': indices})
+        return profiles
 
     @staticmethod
-    def _verified_tunnel_indices(activations, devices, ip_configs, links):
+    def _verified_interface_indices(activations, devices, ip_configs, links):
         # NM shares an IP configuration object between its VPN activation and the
         # device for that interface. The VPN activation's Devices list is the base.
         link_indices = {link['ifname']: link['ifindex'] for link in links}
-        claims = Counter((field, active.get(field)) for active in activations.values() if active['Type'] in TUNNEL_PROFILES
-                         and active['State'] == 2 for field in IP_CONFIG.values())
+        claims = Counter((field, active.get(field)) for active in activations.values()
+                         if active['State'] == 2 for field in IP_CONFIG.values())
         result = {}
         for path, active in activations.items():
             kind = active['Type']
-            if kind not in TUNNEL_PROFILES or active['State'] != 2:
+            if active['State'] != 2:
                 continue
             for family, field in IP_CONFIG.items():
                 config = active.get(field)
@@ -91,10 +100,10 @@ class NetworkManagerReader:
                     config = properties.get(field, '/')
                     if config not in ip_configs:
                         ip_configs[config] = self.bus.properties(owner, config, NM + f'.IP{family}Config')
-            tunnel_bindings = self._verified_tunnel_indices(activations, devices, ip_configs, links)
+            interface_bindings = self._verified_interface_indices(activations, devices, ip_configs, links)
             active = []
             for path, properties in activations.items():
-                indices = tunnel_bindings.get(path, {})
+                indices = interface_bindings.get(path, {})
                 if properties['Type'] in TUNNEL_PROFILES:
                     interfaces = [link['ifname'] for link in links if any(link['ifindex'] in binding for binding in indices.values())]
                 else:
@@ -103,7 +112,8 @@ class NetworkManagerReader:
                 configurations = {f'ip{family}': ip_configs[properties.get(field, '/')]
                                   for family, field in IP_CONFIG.items()}
                 active.append({'uuid': properties['Uuid'], 'name': properties['Id'], 'type': properties['Type'],
-                               'state': properties['State'], 'interfaces': interfaces, 'tunnel_indices': indices, **configurations})
+                               'state': properties['State'], 'interfaces': interfaces, 'interface_indices': indices,
+                               'tunnel_indices': indices if properties['Type'] in TUNNEL_PROFILES else {}, **configurations})
             return {'profiles': profiles, 'active': active, 'links': links}
         except (KeyError, RuntimeError):
             return {'profiles': [], 'active': [], 'links': links}

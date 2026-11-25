@@ -238,6 +238,7 @@ class RoutingRecoveryTests(unittest.TestCase):
         settings = {'ipv4': {'route-data': [{'dest': '198.51.100.8', 'prefix': 32,
                                             'table': 777, 'src': PATH4.source}]}}
         profile = {'uuid': TARGET['id'], 'name': 'Fixture VPN', 'users': (), 'interfaces': [PATH4.interface],
+                   'interface_indices': {4: (PATH4.ifindex,)},
                    'settings': settings, 'serialized': json.dumps(settings)}
         reader = Mock()
         reader.profiles.return_value = reader.migration_profiles.return_value = [profile]

@@ -14,6 +14,29 @@ from test_site_routing_kernel import INSTALLATION, KernelFixture
 
 
 class PolicyOwnershipTests(unittest.TestCase):
+    def test_kernel_overlap_approval_requires_the_reviewed_route_binding(self):
+        runner = KernelFixture(); backend = KernelBackend(runner)
+        row = {'dst': '198.51.100.8/32', 'table': 777, 'dev': PATH4.interface, 'protocol': 'static'}
+        runner.current[4]['route'].append(row)
+        approval = {'kind': 'route', 'family': 4, 'data': row,
+                    'route_binding': {'ifindex': PATH4.ifindex, 'boot_id': 'fixture-boot'}}
+        runner.legacy_route_index = Mock(return_value=PATH4.ifindex + 10)
+        journal = {'objects': [], 'known': [], 'tables': {}, 'priority': 0}
+        assignments = {'198.51.100.8': Assignment('vpn', PATH4), '198.51.100.9': Assignment('vpn', PATH4)}
+        with patch('site_routing.kernel.BOOT_ID_PATH') as boot_id, patch.object(backend, '_verified', return_value=True):
+            boot_id.read_text.return_value = 'fixture-boot\n'
+            result = backend.apply(assignments, journal, INSTALLATION, approved=[approval])
+            self.assertEqual(result['failures']['198.51.100.8']['status'], 'conflict')
+            self.assertNotIn('198.51.100.9', result['failures'])
+            runner.legacy_route_index.side_effect = OSError('The interface was replaced')
+            result = backend.apply(assignments, result, INSTALLATION, approved=[approval])
+            self.assertEqual(result['failures']['198.51.100.8']['status'], 'conflict')
+            self.assertNotIn('198.51.100.9', result['failures'])
+            runner.legacy_route_index.side_effect = None
+            runner.legacy_route_index.return_value = PATH4.ifindex
+            result = backend.apply(assignments, result, INSTALLATION, approved=[approval])
+        self.assertEqual(result['failures'], {})
+
     def test_migration_identity_survives_numeric_protocol_and_table_rendering(self):
         named = {'dst': '198.51.100.8', 'table': 'main', 'protocol': 'static'}
         numeric = {**named, 'table': 254, 'protocol': 4}

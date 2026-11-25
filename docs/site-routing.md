@@ -93,7 +93,9 @@ packages. Activate the rebuilt daemon in a planned maintenance window. The
 property is read-only and reports the kernel index from NetworkManager's L3
 configuration. With a stock daemon lacking the property, existing and saved NM
 VPN targets remain selectable and their known addresses stay blocked. Direct
-and protected AdGuard targets use their own verification paths.
+and protected AdGuard targets use their own verification paths. Automatic
+migration of a saved host route also requires `InterfaceIndex` for its active
+NetworkManager profile and address family.
 
 Open **Site Routing…** in the toggle's menu, or run:
 
@@ -164,18 +166,22 @@ The daemon does not automatically adopt or delete foreign routes or rules.
 An overlapping destination policy blocks application and requires review.
 
 1. Use **Check** to inspect the complete diff. Each saved entry proposed for
-   removal must match a single live legacy policy. Each route's diff shows the
-   interface name and kernel index. The private plan also records the boot ID.
-   Only exact host routes and
-   simple destination rules are eligible. Tables, priorities, selectors and,
-   for routes, interface/gateway/source/metric must match. Broader networks,
+   removal must match a single live legacy policy. NetworkManager must confirm
+   the route's kernel interface index for the active profile that owns it and
+   for the route's address family. The diff shows the interface name and index.
+   The private plan also records the profile UUID and boot ID. Only exact host
+   routes and simple destination rules are eligible. Tables, priorities and
+   selectors must match. Routes also require matching interfaces, gateways,
+   source addresses and metrics. Broader networks,
    ambiguous defaults and complex selectors require administrator review.
 2. **Install protected replacement** authorizes the reviewed plan, retaining
    existing NM entries and saving a private, hashed backup of non-secret settings.
+   Background reconciliation accepts route overlaps only while the current kernel
+   interface index and boot ID match a current approval.
 3. Verify the protected target and both VPNs. **Remove listed legacy entries**
    requires a separate confirmation. It verifies each reviewed route's interface
-   index and boot ID before editing NetworkManager settings and checks the
-   binding again at deletion. If an interface changed, use **Check** to review a
+   index, boot ID and active profile ownership before editing NetworkManager
+   settings and checks the binding again at deletion. If an interface changed, use **Check** to review a
    new diff. It also freshly verifies every replacement
    route through the saved target's table before and after retiring entries,
    including the kernel's selected source address, even if a prior snapshot was
@@ -208,8 +214,8 @@ moves the migration to a different stage, use **Check** again before confirming.
 Retirement and rollback check the profile version during the write. If
 NetworkManager reports a concurrent edit or cannot provide a usable version,
 the migration refuses the write. For an older plan still at `protected` without
-reviewed route bindings or exact saved-entry verification, use
-**Check** to prepare a new diff. The assignment and known addresses stay in
+reviewed route bindings, active profile ownership, or exact saved-entry
+verification, use **Check** to prepare a new diff. The assignment and known addresses stay in
 place, and **Install protected replacement** can authorize the new diff after
 review. If Check cannot produce a verified diff, it shows the reason and keeps
 **Roll back migration** available for the saved plan. Plans that may already

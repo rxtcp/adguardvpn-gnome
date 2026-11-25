@@ -15,7 +15,12 @@ class StaleMigrationConfirmation(ValueError):
 
 def needs_new_review(plan: dict) -> bool:
     return (plan.get('exact_entries') is not True or bool(plan.get('route_bindings_stale')) or
-            any(item['kind'] == 'route' and not item.get('route_binding') for item in plan['overlaps']))
+            any(item['kind'] == 'route' and not (item.get('route_binding') and item.get('route_owner'))
+                for item in plan['overlaps']))
+
+
+def profile_owns_route(profile: dict, item: dict, binding: dict) -> bool:
+    return binding['ifindex'] in profile.get('interface_indices', {}).get(item['family'], ())
 
 
 def public_plan(plan: dict, *, detail: str | None = None) -> dict:
@@ -72,7 +77,10 @@ class MigrationManager:
                             binding = self.kernel.legacy_route_binding(item)
                             if binding is None:
                                 raise ValueError('The reviewed legacy route disappeared. Use Check to review a new diff.')
+                            if not profile_owns_route(profile, item, binding):
+                                raise ValueError('The legacy route interface is not verified for the active NetworkManager profile.')
                             item['route_binding'] = binding
+                            item['route_owner'] = profile['uuid']
                         binding_detail = f' [interface {item["data"]["dev"]}, kernel index {item["route_binding"]["ifindex"]}]'
                     changes.append(f'{profile["name"]} ({profile["uuid"]}): remove {setting}.{field}[{index}] '
                                    + json.dumps(row, sort_keys=True, default=list) + binding_detail)
@@ -96,7 +104,7 @@ class MigrationManager:
     def approved(self, state: dict) -> list[dict]:
         rules = {rule['id']: rule for rule in state['rules']}
         return [item for plan in state['migrations'].values()
-                if plan.get('exact_entries') is True and plan['stage'] in ('protected', 'retiring', 'retired', 'failed')
+                if plan['stage'] in ('protected', 'retiring', 'retired', 'failed') and not needs_new_review(plan)
                 and (rule := rules.get(plan['rule_id'])) is not None
                 and rule['owner_uid'] == plan['owner_uid'] and rule['target'] == plan['target']
                 for item in plan['overlaps']]
@@ -140,11 +148,12 @@ class MigrationManager:
                 raise ValueError('NM settings changed; review a new diff before proceeding.')
             plan['stage'] = 'protected'
             return
-        if stage == 'retire' and (plan['stage'] not in ('protected', 'retiring', 'failed', 'retired') or
-                not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key)):
-            raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
         if stage == 'retire':
+            if plan['stage'] not in ('protected', 'retiring', 'failed', 'retired'):
+                raise ValueError('Install the protected replacement before retiring legacy entries.')
             self._verify_route_bindings(plan)
+            if not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key):
+                raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
         blocked_migrations = migration_blocks(state)
         blocked = set(rule['addresses']) | {address for other in state['rules'] if other['id'] in blocked_migrations
                                             for address in other['addresses']}
@@ -184,17 +193,21 @@ class MigrationManager:
         state['rules'].remove(rule)
 
     def _verify_route_bindings(self, plan: dict) -> None:
+        routes = [(index, item) for index, item in enumerate(plan['overlaps']) if item['kind'] == 'route']
+        if not routes:
+            return
         plan['route_bindings_stale'] = True
         removed = plan.get('removed_overlaps', {})
-        for index, item in enumerate(plan['overlaps']):
-            if item['kind'] != 'route':
-                continue
+        profiles = {profile['uuid']: profile for profile in self.reader.migration_profiles()}
+        for index, item in routes:
             expected = item['route_binding']
             current = self.kernel.legacy_route_binding(item)
             if current is None and removed.get(str(index)) == expected:
                 continue
             if current != expected:
                 raise ValueError('The reviewed legacy route interface binding changed or disappeared. Use Check to review a new diff.')
+            if not profile_owns_route(profiles.get(item['route_owner'], {}), item, current):
+                raise ValueError('The reviewed interface is no longer verified for its active NetworkManager profile. Use Check to review a new diff.')
         plan.pop('route_bindings_stale')
 
     def _apply_legacy_changes(self, state: dict, plan: dict, stage: str) -> None:

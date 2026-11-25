@@ -133,7 +133,7 @@ class NetworkManagerAdapterTests(unittest.TestCase):
                          '/device': {'Interface': 'fixturewan', 'Ip4Config': '/uplink-ip4', 'ActiveConnection': '/physical'},
                          '/tun': self.tunnel, '/ip4': self.ip4, '/ip4-new': self.ip4_new,
                          '/ip6': self.ip6,
-                         '/uplink-ip4': {'AddressData': [{'address': '192.0.2.3'}]}}[path]
+                         '/uplink-ip4': {'AddressData': [{'address': '192.0.2.3'}], 'InterfaceIndex': 4}}[path]
             def update_settings(self, path, serialized, *, owner, version):
                 self.updated = path, serialized, owner, version
         self.bus = Bus()
@@ -146,14 +146,29 @@ class NetworkManagerAdapterTests(unittest.TestCase):
         self.assertEqual(snapshot['active'][0]['interfaces'], ['fixturevpn'])
         self.assertEqual(snapshot['active'][0]['tunnel_indices'], {4: (17,)})
         self.assertEqual(snapshot['active'][1]['interfaces'], ['fixturewan'])
+        self.assertEqual(snapshot['active'][1]['interface_indices'], {4: (4,)})
         self.assertEqual(snapshot['active'][0]['ip6'], {})
         self.assertEqual(snapshot['active'][0]['ip4']['AddressData'][0]['address'], '192.0.2.2')
-        self.assertEqual(self.reader.migration_profiles()[0]['interfaces'], ['fixturevpn'])
+        migration = self.reader.migration_profiles()[0]
+        self.assertEqual(migration['interfaces'], ['fixturevpn'])
+        self.assertEqual(migration['interface_indices'], {4: (17,)})
         profile = snapshot['profiles'][0]
         serialized, settings = self.reader.render_without(profile['serialized'], [{'setting': 'ipv4', 'field': 'route-data', 'indices': [0]}])
         self.reader.update(profile, serialized)
         self.assertEqual(self.bus.updated, ('/profile', serialized, ':1.27', 21))
         self.assertEqual(len(settings['ipv4']['route-data']), 1)
+
+    def test_migration_ownership_requires_an_activated_profile_and_unambiguous_index(self):
+        self.bus.active['State'] = 1
+        self.assertEqual(self.reader.migration_profiles()[0]['interface_indices'], {})
+        self.bus.active['State'] = 2
+        snapshot = self.reader.snapshot()
+        original = snapshot['active'][0]
+        with patch.object(self.reader, 'snapshot', return_value=snapshot):
+            snapshot['active'].append({**original, 'uuid': 'another-profile'})
+            self.assertFalse(self.reader.migration_profiles()[0]['interface_indices'][4])
+            snapshot['active'][-1]['uuid'] = NM_ID
+            self.assertEqual(self.reader.migration_profiles()[0]['interface_indices'], {})
 
     def test_restart_and_oversized_registry_do_not_create_fake_active_providers(self):
         self.bus.broken = True

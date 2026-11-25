@@ -35,7 +35,10 @@ restart with either journal format, and a confirmation that becomes stale
 during retirement. Namespace tests exercise IPv4 and IPv6 route changes by
 interface index and verify that name reuse after review or around deletion
 leaves the unrelated interface's route in place. The migration tests also
-verify that a stale reviewed binding prevents the NetworkManager profile write.
+verify active NetworkManager profile ownership for each reviewed route and
+refuse profile writes when that ownership changes. A namespace test verifies
+that an identical route on a different interface becomes a conflict while an
+independent destination retains its verified path.
 Installer checks cover update and removal dependency ordering.
 CI builds the NetworkManager patch that exports the interface index.
 
