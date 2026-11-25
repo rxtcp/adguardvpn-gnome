@@ -234,6 +234,7 @@ class RoutingRecoveryTests(unittest.TestCase):
         legacy = {'dst': '198.51.100.8/32', 'table': 777, 'protocol': 'static',
                   'dev': PATH4.interface, 'prefsrc': PATH4.source}
         self.runner.current[4]['route'].append(legacy)
+        self.runner.legacy_route_index = Mock(return_value=PATH4.ifindex)
         settings = {'ipv4': {'route-data': [{'dest': '198.51.100.8', 'prefix': 32,
                                             'table': 777, 'src': PATH4.source}]}}
         profile = {'uuid': TARGET['id'], 'name': 'Fixture VPN', 'users': (), 'interfaces': [PATH4.interface],

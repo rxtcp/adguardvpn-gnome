@@ -154,8 +154,10 @@ class PolicyOwnershipTests(unittest.TestCase):
             self.assertTrue(backend.legacy_present(item))
             self.assertTrue(backend.legacy_present(item, binding={'ifindex': PATH4.ifindex, 'boot_id': 'original boot'}))
             self.assertFalse(backend.legacy_present(item, binding={'ifindex': PATH4.ifindex + 1, 'boot_id': 'original boot'}))
-            binding = backend.change_legacy(item, 'del')
+            binding = backend.legacy_route_binding(item)
+            backend.change_legacy(item, 'del', binding=binding)
             self.assertNotIn(row, runner.current[4]['route'])
+            self.assertIsNone(backend.legacy_route_binding(item))
             self.assertFalse(backend.legacy_present(item, binding=binding))
 
             runner.read_links.return_value = []
@@ -165,11 +167,11 @@ class PolicyOwnershipTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'interface identity'):
                 backend.change_legacy(item, 'add', binding=binding)
             runner.read_links.return_value = [{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex + 1}]
-            with self.assertRaisesRegex(RuntimeError, 'interface identity'):
+            with self.assertRaisesRegex(RuntimeError, 'interface binding changed'):
                 backend.change_legacy(item, 'add', binding=binding)
             runner.read_links.return_value = [{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex}]
             boot_id.read_text.return_value = 'new boot\n'
-            with self.assertRaisesRegex(RuntimeError, 'interface identity'):
+            with self.assertRaisesRegex(RuntimeError, 'interface binding changed'):
                 backend.change_legacy(item, 'add', binding=binding)
             self.assertFalse(runner.current[4]['route'])
 
@@ -194,11 +196,27 @@ class PolicyOwnershipTests(unittest.TestCase):
             self.assertEqual(binding['ifindex'], PATH4.ifindex)
             runner.read_links.return_value = [{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex + 10}]
 
-        binding = backend.change_legacy(item, 'del', before_delete=reuse_name)
+        reviewed = backend.legacy_route_binding(item)
+        binding = backend.change_legacy(item, 'del', binding=reviewed, before_delete=reuse_name)
         self.assertEqual(binding['ifindex'], PATH4.ifindex)
         runner.read_links.assert_not_called()
         runner.change_legacy_route.assert_called_once_with(item, 'del', PATH4.ifindex)
         self.assertEqual(runner.events, [])
+
+    def test_legacy_route_delete_rechecks_the_reviewed_binding_at_the_write(self):
+        runner = KernelFixture(); backend = KernelBackend(runner)
+        item = {'kind': 'route', 'family': 4, 'data': {'dst': '198.51.100.8/32', 'dev': PATH4.interface}}
+        runner.legacy_route_index = Mock(return_value=PATH4.ifindex + 10)
+        runner.current[4]['route'].append(item['data'])
+        runner.read_links = Mock(return_value=[{'ifname': PATH4.interface, 'ifindex': PATH4.ifindex + 10}])
+        runner.change_legacy_route = Mock()
+        intent = Mock()
+        with patch('site_routing.kernel.BOOT_ID_PATH') as boot_id:
+            boot_id.read_text.return_value = 'fixture-boot\n'
+            with self.assertRaisesRegex(RuntimeError, 'interface binding changed'):
+                backend.change_legacy(item, 'del', binding={'ifindex': PATH4.ifindex, 'boot_id': 'fixture-boot'}, before_delete=intent)
+        runner.change_legacy_route.assert_not_called()
+        intent.assert_not_called()
 
 
 class LegacyArgumentTests(unittest.TestCase):

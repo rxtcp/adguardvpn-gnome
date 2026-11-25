@@ -33,8 +33,9 @@ intact. Rollback tests cover a protected plan with a reused tunnel name, a crash
 between kernel deletion and saving its outcome, continued blocking after
 restart with either journal format, and a confirmation that becomes stale
 during retirement. Namespace tests exercise IPv4 and IPv6 route changes by
-interface index and verify that name reuse during or before deletion leaves
-the unrelated interface's route in place.
+interface index and verify that name reuse after review or around deletion
+leaves the unrelated interface's route in place. The migration tests also
+verify that a stale reviewed binding prevents the NetworkManager profile write.
 Installer checks cover update and removal dependency ordering.
 CI builds the NetworkManager patch that exports the interface index.
 

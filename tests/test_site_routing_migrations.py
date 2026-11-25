@@ -41,6 +41,7 @@ class MigrationTests(unittest.TestCase):
             def block(self, addresses, installation): self.events.append('block')
             def protect_subset(self, addresses, journal, installation): self.events.append('block')
             def verify_replacement(self, addresses, journal, target_key): return True
+            def legacy_route_binding(self, item): return {'ifindex': 17, 'boot_id': 'fixture-boot'}
             def change_legacy(self, item, action, *, binding=None, before_delete=None):
                 self.events.append(action)
                 receipt = {'ifindex': 17, 'boot_id': 'fixture-boot'} if item['kind'] == 'route' else {}
@@ -59,6 +60,15 @@ class MigrationTests(unittest.TestCase):
         backup = self.state['migrations'][plan['id']]['profiles'][0]
         self.assertEqual(json.loads(backup['before']), self.profile['settings'])
         self.assertNotIn('203.0.113.0/24', '\n'.join(plan['changes']))
+
+    def test_duplicate_saved_entries_use_the_same_reviewed_interface(self):
+        routes = self.profile['settings']['ipv4']['route-data']
+        routes.append(copy.deepcopy(routes[0]))
+        self.profile['serialized'] = json.dumps(self.profile['settings'])
+        with patch.object(self.kernel, 'legacy_route_binding', wraps=self.kernel.legacy_route_binding) as binding:
+            plan = self.manager.preview(self.state, self.rule)
+        binding.assert_called_once()
+        self.assertEqual(sum('kernel index 17' in change for change in plan['changes']), 2)
 
     def test_migration_requires_distinct_protect_and_retire_confirmations_then_supports_rollback(self):
         original = copy.deepcopy(self.profile['settings'])
@@ -82,6 +92,57 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
         self.assertEqual(self.kernel.events, [])
+
+    def test_retirement_rejects_same_route_on_a_reused_name_before_modifying_the_profile(self):
+        original = copy.deepcopy(self.profile['settings'])
+        binding = {'ifindex': 17, 'boot_id': 'fixture-boot'}
+        with patch.object(self.kernel, 'legacy_route_binding', return_value=binding) as live:
+            plan = self.manager.preview(self.state, self.rule)
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+            self.store.save(self.state)
+            restarted = self.store.load()
+            live.return_value = {**binding, 'ifindex': 27}
+            with patch.object(self.reader, 'update', wraps=self.reader.update) as update:
+                with self.assertRaisesRegex(ValueError, 'interface binding changed'):
+                    self.manager.apply(restarted, restarted['rules'][0], {'id': plan['id'], 'stage': 'retire'})
+            update.assert_not_called()
+            self.assertEqual(self.profile['settings'], original)
+            self.assertEqual(self.kernel.events, [])
+            self.assertEqual(restarted['migrations'][plan['id']]['stage'], 'protected')
+            refreshed = self.manager.preview(restarted, restarted['rules'][0])
+        self.assertNotEqual(refreshed['id'], plan['id'])
+        self.assertTrue(any('index 27' in change for change in refreshed['changes']))
+
+    def test_old_route_plan_requires_a_fresh_review_and_keeps_rollback_if_the_route_is_absent(self):
+        plan = self.manager.preview(self.state, self.rule)
+        self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'protect'})
+        stored = self.state['migrations'][plan['id']]
+        del stored['overlaps'][1]['route_binding']
+        with self.assertRaisesRegex(ValueError, 'needs a verified route interface binding'):
+            self.manager.apply(self.state, self.rule, {'id': plan['id'], 'stage': 'retire'})
+        with patch.object(self.kernel, 'legacy_route_binding', return_value=None):
+            retained = self.manager.preview(self.state, self.rule)
+        self.assertEqual(retained['id'], plan['id'])
+        self.assertTrue(retained['rollback_only'])
+        self.assertIn('legacy route disappeared', retained['detail'])
+        replacement = self.manager.preview(self.state, self.rule)
+        self.assertNotEqual(replacement['id'], plan['id'])
+        self.assertEqual(replacement['stage'], 'preview')
+        self.assertEqual(self.state['rules'], [self.rule])
+        self.assertEqual(self.kernel.events, [])
+
+    def test_retirement_can_retry_after_the_reviewed_route_was_already_deleted(self):
+        plan = self.manager.preview(self.state, self.rule)
+        request = {'id': plan['id'], 'stage': 'protect'}
+        self.manager.apply(self.state, self.rule, request)
+        request['stage'] = 'retire'
+        self.manager.apply(self.state, self.rule, request)
+        with patch.object(self.kernel, 'legacy_route_binding', return_value=None), \
+                patch.object(self.kernel, 'change_legacy', return_value=None), \
+                patch.object(self.reader, 'update') as update:
+            self.manager.apply(self.state, self.rule, request)
+        update.assert_not_called()
+        self.assertEqual(self.state['migrations'][plan['id']]['stage'], 'retired')
 
     def test_retirement_rechecks_the_kernel_even_if_the_previous_public_status_was_active(self):
         plan = self.manager.preview(self.state, self.rule)
@@ -214,7 +275,7 @@ class MigrationTests(unittest.TestCase):
         legacy_rule = self.kernel.overlaps([], {})[0]
         live = [legacy_rule]
 
-        def interrupt(item, action, *, before_delete=None):
+        def interrupt(item, action, *, binding=None, before_delete=None):
             if before_delete is not None:
                 before_delete({})
             live.remove(item)

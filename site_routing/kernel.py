@@ -124,6 +124,10 @@ class KernelBackend:
     def _legacy_rule_present(self, item: dict) -> bool:
         return item['data'] in self.runner.read_ip(item['family'], 'rule', 'show')
 
+    def legacy_route_binding(self, item: dict) -> dict | None:
+        index = self.runner.legacy_route_index(item)
+        return None if index is None else self._route_binding(index)
+
     def legacy_present(self, item: dict, *, binding: dict | None = None) -> bool:
         if item['kind'] == 'rule':
             return self._legacy_rule_present(item)
@@ -138,8 +142,8 @@ class KernelBackend:
         if action == 'del' and not present:
             return None
         current = self._route_binding(index if index is not None else self._restoration_index(item)) if route else {}
-        if route and action == 'add' and current != binding:
-            raise RuntimeError('The legacy route interface identity changed. Review the NetworkManager connection before removing protection.')
+        if route and current != binding:
+            raise RuntimeError('The legacy route interface binding changed or cannot be verified. Review the NetworkManager connection.')
         if action == 'add' and present:
             return None
         if action == 'del' and before_delete is not None:

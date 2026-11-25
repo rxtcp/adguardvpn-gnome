@@ -13,14 +13,19 @@ class StaleMigrationConfirmation(ValueError):
     pass
 
 
+def needs_new_review(plan: dict) -> bool:
+    return (plan.get('exact_entries') is not True or bool(plan.get('route_bindings_stale')) or
+            any(item['kind'] == 'route' and not item.get('route_binding') for item in plan['overlaps']))
+
+
 def public_plan(plan: dict, *, detail: str | None = None) -> dict:
     return {'id': plan['id'], 'stage': plan['stage'], 'changes': list(plan['changes']),
             'detail': plan.get('last_error', '') if detail is None else detail[:2048],
-            'rollback_only': plan.get('exact_entries') is not True}
+            'rollback_only': needs_new_review(plan)}
 
 
 def can_refresh_preview(plan: dict) -> bool:
-    return plan['stage'] == 'preview' or (plan['stage'] == 'protected' and plan.get('exact_entries') is not True)
+    return plan['stage'] == 'preview' or (plan['stage'] == 'protected' and needs_new_review(plan))
 
 
 class MigrationManager:
@@ -60,13 +65,21 @@ class MigrationManager:
                                and matches_entry(item, profile, field, row)]
                     if len(matches) != 1 or matched.setdefault(matches[0], profile['uuid']) != profile['uuid']:
                         raise ValueError('A saved policy entry cannot be matched exactly to a live NM policy; no automatic deletion is allowed.')
+                    item = overlaps[matches[0]]
+                    binding_detail = ''
+                    if item['kind'] == 'route':
+                        if 'route_binding' not in item:
+                            binding = self.kernel.legacy_route_binding(item)
+                            if binding is None:
+                                raise ValueError('The reviewed legacy route disappeared. Use Check to review a new diff.')
+                            item['route_binding'] = binding
+                        binding_detail = f' [interface {item["data"]["dev"]}, kernel index {item["route_binding"]["ifindex"]}]'
+                    changes.append(f'{profile["name"]} ({profile["uuid"]}): remove {setting}.{field}[{index}] '
+                                   + json.dumps(row, sort_keys=True, default=list) + binding_detail)
             after, after_settings = self.reader.render_without(profile['serialized'], patches)
             profiles.append({'uuid': profile['uuid'], 'before': profile['serialized'], 'after': after,
                              'addresses': sorted({address for patch in patches for address in patch['addresses']}),
                              'before_hash': settings_hash(profile['settings']), 'after_hash': settings_hash(after_settings)})
-            changes += [f'{profile["name"]} ({profile["uuid"]}): remove {patch["setting"]}.{patch["field"]}[{index}] '
-                        + json.dumps(profile['settings'][patch['setting']][patch['field']][index], sort_keys=True, default=list)
-                        for patch in patches for index in patch['indices']]
         if not profiles:
             return None
         if len(matched) != len(overlaps):
@@ -111,6 +124,8 @@ class MigrationManager:
     def _apply(self, state: dict, rule: dict, plan: dict, stage: str) -> None:
         if stage != 'rollback' and plan.get('exact_entries') is not True:
             raise ValueError('This plan predates exact saved-entry verification. Review a new diff or roll back the old plan.')
+        if stage != 'rollback' and needs_new_review(plan):
+            raise ValueError('This plan needs a verified route interface binding. Use Check to review a new diff or roll back.')
         if stage == 'rollback':
             if plan['stage'] not in ROLLBACK_STAGES:
                 raise ValueError('There is no applied migration to roll back.')
@@ -128,6 +143,8 @@ class MigrationManager:
         if stage == 'retire' and (plan['stage'] not in ('protected', 'retiring', 'failed', 'retired') or
                 not self.kernel.verify_replacement(rule['addresses'], state['kernel'], target_key)):
             raise ValueError('Replacement is not verified for every known IP. Restore the target tunnel and use Check before retrying legacy removal.')
+        if stage == 'retire':
+            self._verify_route_bindings(plan)
         blocked_migrations = migration_blocks(state)
         blocked = set(rule['addresses']) | {address for other in state['rules'] if other['id'] in blocked_migrations
                                             for address in other['addresses']}
@@ -166,6 +183,20 @@ class MigrationManager:
         plan['stage'] = 'rolled-back'
         state['rules'].remove(rule)
 
+    def _verify_route_bindings(self, plan: dict) -> None:
+        plan['route_bindings_stale'] = True
+        removed = plan.get('removed_overlaps', {})
+        for index, item in enumerate(plan['overlaps']):
+            if item['kind'] != 'route':
+                continue
+            expected = item['route_binding']
+            current = self.kernel.legacy_route_binding(item)
+            if current is None and removed.get(str(index)) == expected:
+                continue
+            if current != expected:
+                raise ValueError('The reviewed legacy route interface binding changed or disappeared. Use Check to review a new diff.')
+        plan.pop('route_bindings_stale')
+
     def _apply_legacy_changes(self, state: dict, plan: dict, stage: str) -> None:
         removed = plan.setdefault('removed_overlaps', {})
         overlaps = plan['overlaps']
@@ -176,7 +207,7 @@ class MigrationManager:
                 self.store.save(state)
 
             for index, item in enumerate(overlaps):
-                binding = self.kernel.change_legacy(item, 'del', before_delete=record_intent)
+                binding = self.kernel.change_legacy(item, 'del', binding=item.get('route_binding'), before_delete=record_intent)
                 if binding is not None:
                     removed[str(index)] = binding
                     plan['pending_overlap'] = None

@@ -164,14 +164,19 @@ The daemon does not automatically adopt or delete foreign routes or rules.
 An overlapping destination policy blocks application and requires review.
 
 1. Use **Check** to inspect the complete diff. Each saved entry proposed for
-   removal must match a single live legacy policy. Only exact host routes and
+   removal must match a single live legacy policy. Each route's diff shows the
+   interface name and kernel index. The private plan also records the boot ID.
+   Only exact host routes and
    simple destination rules are eligible. Tables, priorities, selectors and,
    for routes, interface/gateway/source/metric must match. Broader networks,
    ambiguous defaults and complex selectors require administrator review.
 2. **Install protected replacement** authorizes the reviewed plan, retaining
    existing NM entries and saving a private, hashed backup of non-secret settings.
 3. Verify the protected target and both VPNs. **Remove listed legacy entries**
-   requires a separate confirmation. It freshly verifies every replacement
+   requires a separate confirmation. It verifies each reviewed route's interface
+   index and boot ID before editing NetworkManager settings and checks the
+   binding again at deletion. If an interface changed, use **Check** to review a
+   new diff. It also freshly verifies every replacement
    route through the saved target's table before and after retiring entries,
    including the kernel's selected source address, even if a prior snapshot was
    `active`, and deletes only the reviewed entries. Only the migration's
@@ -202,7 +207,8 @@ moves the migration to a different stage, use **Check** again before confirming.
 
 Retirement and rollback check the profile version during the write. If
 NetworkManager reports a concurrent edit or cannot provide a usable version,
-the migration refuses the write. For an older plan still at `protected`, use
+the migration refuses the write. For an older plan still at `protected` without
+reviewed route bindings or exact saved-entry verification, use
 **Check** to prepare a new diff. The assignment and known addresses stay in
 place, and **Install protected replacement** can authorize the new diff after
 review. If Check cannot produce a verified diff, it shows the reason and keeps

@@ -148,8 +148,9 @@ legacy kernel entries whose removal the service recorded. If interrupted removal
 leaves an uncertain outcome, restore the exact legacy policy through NetworkManager
 before retrying rollback. Site Routing keeps the affected addresses blocked
 across service restarts until recovery is verified, including with older
-unfinished migration journals. Legacy route deletion takes the interface index
-from the same kernel record it matches against the reviewed route.
+unfinished migration journals. Each reviewed legacy route is bound to its
+kernel interface index and system boot. A change in that binding requires a
+fresh review before the NetworkManager settings can be modified.
 
 Rerunning the Site Routing installer restores known-address protection through
 the manager while keeping the early guard and NetworkManager running.

@@ -54,13 +54,15 @@ class NamespaceRoutingTests(unittest.TestCase):
                          'dev', path.interface, 'src', path.source, 'proto', 'static', 'metric', '20')
         row6 = legacy_routes(6)[0]
         item6 = {'kind': 'route', 'family': 6, 'data': row6}
-        binding6 = backend.change_legacy(item6, 'del')
+        binding6 = backend.legacy_route_binding(item6)
+        backend.change_legacy(item6, 'del', binding=binding6)
         backend.change_legacy(item6, 'add', binding=binding6)
         self.assertEqual(legacy_routes(6), [row6])
 
         row4 = legacy_routes(4)[0]
         item4 = {'kind': 'route', 'family': 4, 'data': row4}
-        binding4 = backend.change_legacy(item4, 'del')
+        binding4 = backend.legacy_route_binding(item4)
+        backend.change_legacy(item4, 'del', binding=binding4)
         change = runner.change_legacy_route
 
         def reuse_name(item, action, index):
@@ -93,6 +95,7 @@ class NamespaceRoutingTests(unittest.TestCase):
 
         row = legacy_routes()[0]
         item = {'kind': 'route', 'family': 4, 'data': row}
+        reviewed = backend.legacy_route_binding(item)
 
         def reuse_name(binding):
             self.assertEqual(binding['ifindex'], original.ifindex)
@@ -103,7 +106,9 @@ class NamespaceRoutingTests(unittest.TestCase):
             self.assertEqual(legacy_routes(), [row])
 
         with self.assertRaisesRegex(RuntimeError, 'kernel refused'):
-            backend.change_legacy(item, 'del', before_delete=reuse_name)
+            backend.change_legacy(item, 'del', binding=reviewed, before_delete=reuse_name)
+        with self.assertRaisesRegex(RuntimeError, 'interface binding changed'):
+            backend.change_legacy(item, 'del', binding=reviewed, before_delete=lambda _: self.fail('unreviewed deletion'))
         self.assertEqual(legacy_routes(), [row])
 
     def test_legacy_route_index_survives_name_reuse_between_dump_and_interface_check(self):
@@ -120,6 +125,7 @@ class NamespaceRoutingTests(unittest.TestCase):
 
         row = legacy_routes()[0]
         item = {'kind': 'route', 'family': 4, 'data': row}
+        reviewed = backend.legacy_route_binding(item)
         original_name = socket.if_indextoname
 
         def reuse_name(index):
@@ -132,7 +138,7 @@ class NamespaceRoutingTests(unittest.TestCase):
 
         with patch('site_routing.route_netlink.socket.if_indextoname', side_effect=reuse_name) as name:
             with self.assertRaises(OSError):
-                backend.change_legacy(item, 'del', before_delete=lambda _: self.fail('no deletion was verified'))
+                backend.change_legacy(item, 'del', binding=reviewed, before_delete=lambda _: self.fail('no deletion was verified'))
         name.assert_called_once_with(original.ifindex)
         self.assertEqual(legacy_routes(), [row])
 
